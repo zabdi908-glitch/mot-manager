@@ -12,10 +12,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../frontend')));
 
-// Path to the JSON database file - uses Render's persistent disk if available
-const DATA_FILE = process.env.RENDER_DISK_PATH 
-    ? path.join(process.env.RENDER_DISK_PATH, 'data.json') 
-    : path.join(__dirname, 'data.json');
+const DATA_FILE = '/opt/render/data/data.json';
 
 // ---- Helpers ----
 function readData() {
