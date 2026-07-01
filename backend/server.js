@@ -64,52 +64,66 @@ function getStage(days) {
 }
 
 function buildReminderEmail(customer, vehicle, days) {
+  // Format the expiry date nicely for the UK
   const expiryUK = new Date(vehicle.motExpiry + 'T00:00:00').toLocaleDateString('en-GB', {
-    day: 'numeric', month: 'long', year: 'numeric'
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
   });
-  let subject, headline;
+
+  let subject, headline, urgencyText;
+  
   if (days < 0) {
-    subject = `MOT overdue – ${vehicle.regNumber}`;
-    headline = `Your MOT for ${vehicle.regNumber} expired on ${expiryUK}. Please book a test immediately – driving without a valid MOT can invalidate your insurance.`;
+    subject = `🚨 ACTION REQUIRED: MOT Overdue for ${vehicle.regNumber}`;
+    headline = `Your MOT for ${vehicle.regNumber} expired on ${expiryUK}.`;
+    urgencyText = `<strong>It is now overdue.</strong> Please book a test immediately to avoid penalties and to ensure your insurance remains valid.`;
   } else if (days <= 7) {
-    subject = `MOT due in ${days} day${days === 1 ? '' : 's'} – ${vehicle.regNumber}`;
+    subject = `⚠️ MOT Due in ${days} day${days === 1 ? '' : 's'} – ${vehicle.regNumber}`;
     headline = `Your MOT for ${vehicle.regNumber} is due in ${days} day${days === 1 ? '' : 's'}, on ${expiryUK}.`;
+    urgencyText = `We recommend booking your slot today to ensure your vehicle is kept on the road without interruption.`;
   } else {
-    subject = `MOT reminder – ${vehicle.regNumber} due ${expiryUK}`;
+    subject = `📅 MOT Reminder – ${vehicle.regNumber} due ${expiryUK}`;
     headline = `This is a friendly reminder that your MOT for ${vehicle.regNumber} is due on ${expiryUK} (${days} days from now).`;
+    urgencyText = `Avoid the last-minute rush by booking your appointment early.`;
   }
-  const text =
-`Hi ${customer.name},
+
+  // HTML version for a cleaner look in email clients
+  const html = `
+    <div style="font-family: Arial, sans-serif; color: #333; line-height: 1.6;">
+      <p>Hi ${customer.name},</p>
+      <p>${headline}</p>
+      <p>${urgencyText}</p>
+      <ul style="background: #f9f9f9; padding: 15px; border-radius: 6px; list-style-type: none;">
+        <li><strong>Vehicle:</strong> ${vehicle.make} ${vehicle.model}</li>
+        <li><strong>Registration:</strong> ${vehicle.regNumber}</li>
+        <li><strong>MOT Expiry:</strong> ${expiryUK}</li>
+      </ul>
+      <p><a href="https://mot-manager.onrender.com" style="background-color: #CE2026; color: #ffffff; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold;">📅 BOOK YOUR MOT NOW</a></p>
+      <p style="font-size: 0.9em; color: #777;">Prefer to call? Give us a ring on <strong>0121 378 0001</strong>.</p>
+      <p>Kind regards,<br>
+      The MOT Manager Team</p>
+    </div>
+  `;
+
+  // Plain text fallback (in case the customer's email client doesn't support HTML)
+  const text = `
+Hi ${customer.name},
 
 ${headline}
 
+${urgencyText}
+
 Vehicle: ${vehicle.make} ${vehicle.model}
 Registration: ${vehicle.regNumber}
+MOT Expiry: ${expiryUK}
 
-Reply to this email or get in touch to book your test.
+To book your test, visit our website at: https://mot-manager.onrender.com
 
-Thanks,
-The Workshop Team`;
-  return { subject, text };
-}
+Or call us on: 0121 378 0001
 
-async function sendReminderEmail(customer, vehicle, days) {
-  if (!transporter) return false;
-  if (!customer || !customer.email) return false;
-  const { subject, text } = buildReminderEmail(customer, vehicle, days);
-  try {
-    await transporter.sendMail({
-      from: `"MOT Manager" <${process.env.EMAIL_USER}>`,
-      to: customer.email,
-      subject,
-      text
-    });
-    console.log(`✅ Reminder email sent to ${customer.email} for ${vehicle.regNumber}`);
-    return true;
-  } catch (err) {
-    console.error(`❌ Failed to send reminder email for ${vehicle.regNumber}:`, err.message);
-    return false;
-  }
+Kind regards,
+The MOT Manager Team
+  `;
+
+  return { subject, html, text };
 }
 
 // ---- The core reminder check (idempotent) ----
