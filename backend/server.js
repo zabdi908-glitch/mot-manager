@@ -11,6 +11,11 @@ const PORT = process.env.PORT || 3000;
 // You can override it by setting PUBLIC_URL yourself if needed.
 const APP_URL = process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
 
+// Business details shown in emails — set these as env vars so you never have
+// to touch code to update them.
+const BUSINESS_NAME = process.env.BUSINESS_NAME || 'The Workshop';
+const BUSINESS_PHONE = process.env.BUSINESS_PHONE || '';
+
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -119,20 +124,32 @@ function buildReminderEmail(customer, vehicle, days) {
   const expiryUK = new Date(vehicle.motExpiry + 'T00:00:00').toLocaleDateString('en-GB', {
     day: 'numeric', month: 'long', year: 'numeric'
   });
-  let subject, headline;
+
+  let subject, headline, urgencyColor, urgencyLabel;
   if (days < 0) {
-    subject = `MOT overdue – ${vehicle.regNumber}`;
-    headline = `Your MOT for ${vehicle.regNumber} expired on ${expiryUK}. Please book a test as soon as possible — driving without a valid MOT can invalidate your insurance.`;
+    const daysAgo = Math.abs(days);
+    subject = `Action needed: MOT overdue for ${vehicle.regNumber}`;
+    headline = `Your MOT expired ${daysAgo} day${daysAgo === 1 ? '' : 's'} ago, on ${expiryUK}. Please book a test as soon as possible — driving without a valid MOT can invalidate your insurance.`;
+    urgencyColor = '#b8262c';
+    urgencyLabel = 'OVERDUE';
   } else if (days <= 7) {
-    subject = `MOT due in ${days} day${days === 1 ? '' : 's'} – ${vehicle.regNumber}`;
-    headline = `Your MOT for ${vehicle.regNumber} is due in ${days} day${days === 1 ? '' : 's'}, on ${expiryUK}.`;
+    subject = `Reminder: MOT due in ${days} day${days === 1 ? '' : 's'} – ${vehicle.regNumber}`;
+    headline = `Your MOT is due in ${days} day${days === 1 ? '' : 's'}, on ${expiryUK}. Now's a good time to get it booked in.`;
+    urgencyColor = '#8a5a00';
+    urgencyLabel = `DUE IN ${days} DAY${days === 1 ? '' : 'S'}`;
   } else {
-    subject = `MOT reminder – ${vehicle.regNumber} due ${expiryUK}`;
-    headline = `This is a friendly reminder that your MOT for ${vehicle.regNumber} is due on ${expiryUK} (${days} days from now).`;
+    subject = `Heads up: MOT due ${expiryUK} – ${vehicle.regNumber}`;
+    headline = `Just a friendly early reminder — your MOT is due on ${expiryUK}, which is ${days} days away.`;
+    urgencyColor = '#2b5d34';
+    urgencyLabel = 'UPCOMING';
   }
+
   const bookingLink = `${APP_URL}/?reg=${encodeURIComponent(vehicle.regNumber)}`;
+  const firstName = (customer.name || '').split(' ')[0] || customer.name;
+  const phoneLine = BUSINESS_PHONE ? `\nOr call us on ${BUSINESS_PHONE}.` : '';
+
   const text =
-`Hi ${customer.name},
+`Hi ${firstName},
 
 ${headline}
 
@@ -140,25 +157,69 @@ Vehicle: ${vehicle.make} ${vehicle.model}
 Registration: ${vehicle.regNumber}
 
 Book your test online here:
-${bookingLink}
-
-Or reply to this email to arrange it directly.
+${bookingLink}${phoneLine}
 
 Thanks,
-The Workshop Team`;
-  return { subject, text };
+${BUSINESS_NAME}`;
+
+  const html = `
+  <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 480px; margin: 0 auto; background: #f5f1e6;">
+    <div style="background: #1c2321; padding: 20px 24px; text-align: center;">
+      <div style="color: #ffd400; font-weight: bold; font-size: 18px; letter-spacing: 0.5px;">${BUSINESS_NAME}</div>
+    </div>
+    <div style="padding: 28px 24px;">
+      <p style="font-size: 16px; color: #1c2321; margin: 0 0 16px;">Hi ${firstName},</p>
+      <div style="display: inline-block; background: ${urgencyColor}1a; color: ${urgencyColor}; border: 2px solid ${urgencyColor}; border-radius: 4px; padding: 4px 12px; font-size: 12px; font-weight: bold; letter-spacing: 1px; margin-bottom: 16px;">
+        ${urgencyLabel}
+      </div>
+      <p style="font-size: 15px; color: #333d3a; line-height: 1.5; margin: 0 0 20px;">${headline}</p>
+
+      <table style="width: 100%; background: #fffdf8; border: 1px solid #d9d0ba; border-radius: 4px; border-collapse: collapse; margin-bottom: 24px;">
+        <tr>
+          <td style="padding: 12px 16px; color: #55605c; font-size: 13px;">Vehicle</td>
+          <td style="padding: 12px 16px; color: #1c2321; font-size: 13px; font-weight: bold; text-align: right;">${vehicle.make} ${vehicle.model}</td>
+        </tr>
+        <tr>
+          <td style="padding: 0 16px 12px; color: #55605c; font-size: 13px;">Registration</td>
+          <td style="padding: 0 16px 12px; text-align: right;">
+            <span style="display: inline-block; background: #ffd400; color: #1c2321; border: 2px solid #1c2321; border-radius: 3px; padding: 2px 8px; font-weight: bold; letter-spacing: 1px; font-size: 13px;">${vehicle.regNumber}</span>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 0 16px 12px; color: #55605c; font-size: 13px;">MOT Expiry</td>
+          <td style="padding: 0 16px 12px; color: #1c2321; font-size: 13px; font-weight: bold; text-align: right;">${expiryUK}</td>
+        </tr>
+      </table>
+
+      <div style="text-align: center; margin-bottom: 20px;">
+        <a href="${bookingLink}" style="display: inline-block; background: #1c2321; color: #ffd400; text-decoration: none; font-weight: bold; padding: 14px 32px; border-radius: 4px; font-size: 15px; letter-spacing: 0.5px;">
+          BOOK YOUR TEST
+        </a>
+      </div>
+
+      <p style="font-size: 13px; color: #8b8f83; text-align: center; margin: 0;">
+        ${BUSINESS_PHONE ? `Or call us on ${BUSINESS_PHONE}` : 'Or reply to this email to arrange it directly'}
+      </p>
+    </div>
+    <div style="padding: 16px 24px; text-align: center; border-top: 1px solid #d9d0ba;">
+      <p style="font-size: 12px; color: #8b8f83; margin: 0;">${BUSINESS_NAME}</p>
+    </div>
+  </div>`;
+
+  return { subject, text, html };
 }
 
 async function sendReminderEmail(customer, vehicle, days) {
   if (!transporter) return false;
   if (!customer || !customer.email) return false;
-  const { subject, text } = buildReminderEmail(customer, vehicle, days);
+  const { subject, text, html } = buildReminderEmail(customer, vehicle, days);
   try {
     await transporter.sendMail({
-      from: `"MOT Manager" <${process.env.EMAIL_USER}>`,
+      from: `"${BUSINESS_NAME}" <${process.env.EMAIL_USER}>`,
       to: customer.email,
       subject,
-      text
+      text,
+      html
     });
     console.log(`✅ Reminder email sent to ${customer.email} for ${vehicle.regNumber} (${subject})`);
     return true;
