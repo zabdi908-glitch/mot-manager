@@ -301,6 +301,7 @@
                     Alerts <span id="notifCount" class="count">0</span>
                 </button>
                 <button class="btn-outline" id="addVehicleBtn" style="padding:0.5rem 1.3rem;">+ Add Vehicle</button>
+                <a class="btn-outline" href="/api/backup" style="padding:0.5rem 1.3rem;display:inline-block;">Backup</a>
             </div>
         </header>
 
@@ -382,6 +383,10 @@
             <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.5rem;margin-bottom:1rem;">
                 <h3>Your Vehicles</h3>
                 <button class="btn-primary" id="showAddFormBtn" style="width:auto;padding:0.55rem 1.5rem;">+ Add Vehicle</button>
+            </div>
+            <div style="display:flex;gap:0.6rem;flex-wrap:wrap;margin-bottom:1rem;">
+                <input type="text" id="vehicleSearch" placeholder="Search by reg, make, model or customer..." style="flex:1;min-width:200px;" />
+                <button class="btn-outline" id="exportDueBtn" style="padding:0.6rem 1.2rem;white-space:nowrap;">Export Due/Overdue (CSV)</button>
             </div>
             <div id="vehicleList" class="list-grid"></div>
         </section>
@@ -467,6 +472,7 @@
                 <h3>Your Customers</h3>
                 <button class="btn-primary" id="showAddCustomerFormBtn" style="width:auto;padding:0.55rem 1.5rem;">+ Add Customer</button>
             </div>
+            <input type="text" id="customerSearch" placeholder="Search by name, phone or email..." style="width:100%;margin-bottom:1rem;" />
             <div id="customerList" class="list-grid"></div>
         </section>
         </div>
@@ -713,11 +719,21 @@
 
             function renderCustomers() {
                 const container = document.getElementById('customerList');
-                if (data.customers.length === 0) {
-                    container.innerHTML = `<div class="empty-state"><div class="icon">＋</div><h4>No customers yet</h4><p>Add your first customer to link them to vehicles.</p></div>`;
+                const searchTerm = (document.getElementById('customerSearch').value || '').toLowerCase().trim();
+                let customers = data.customers;
+                if (searchTerm) {
+                    customers = customers.filter(c => {
+                        const haystack = `${c.name} ${c.phone || ''} ${c.email || ''}`.toLowerCase();
+                        return haystack.includes(searchTerm);
+                    });
+                }
+                if (customers.length === 0) {
+                    container.innerHTML = searchTerm
+                        ? `<div class="empty-state"><div class="icon">🔍</div><h4>No matches</h4><p>No customers match "${searchTerm}".</p></div>`
+                        : `<div class="empty-state"><div class="icon">＋</div><h4>No customers yet</h4><p>Add your first customer to link them to vehicles.</p></div>`;
                     return;
                 }
-                container.innerHTML = data.customers.map(c => `
+                container.innerHTML = customers.map(c => `
                     <div class="list-item-card">
                         <div class="item-info">
                             <div class="title">${c.name}</div>
@@ -744,9 +760,19 @@
 
             function renderVehicles() {
                 const container = document.getElementById('vehicleList');
-                const vehicles = getVehiclesWithStatus();
+                const searchTerm = (document.getElementById('vehicleSearch').value || '').toLowerCase().trim();
+                let vehicles = getVehiclesWithStatus();
+                if (searchTerm) {
+                    vehicles = vehicles.filter(v => {
+                        const cust = getCustomer(v.customerId);
+                        const haystack = `${v.regNumber} ${v.make} ${v.model} ${cust ? cust.name : ''}`.toLowerCase();
+                        return haystack.includes(searchTerm);
+                    });
+                }
                 if (vehicles.length === 0) {
-                    container.innerHTML = `<div class="empty-state"><div class="icon">＋</div><h4>No vehicles yet</h4><p>Add your first vehicle to start tracking MOTs.</p></div>`;
+                    container.innerHTML = searchTerm
+                        ? `<div class="empty-state"><div class="icon">🔍</div><h4>No matches</h4><p>No vehicles match "${searchTerm}".</p></div>`
+                        : `<div class="empty-state"><div class="icon">＋</div><h4>No vehicles yet</h4><p>Add your first vehicle to start tracking MOTs.</p></div>`;
                     return;
                 }
                 container.innerHTML = vehicles.map(v => {
@@ -1010,6 +1036,36 @@
                 // Tabs
                 document.querySelectorAll('.nav-tab').forEach(tab => {
                     tab.addEventListener('click', () => { switchTab(tab.dataset.panel); });
+                });
+
+                // Search boxes (client-side filtering)
+                document.getElementById('vehicleSearch').addEventListener('input', renderVehicles);
+                document.getElementById('customerSearch').addEventListener('input', renderCustomers);
+
+                // Export due/overdue vehicles as CSV
+                document.getElementById('exportDueBtn').addEventListener('click', () => {
+                    const due = getVehiclesWithStatus().filter(v => v.status === 'due-soon' || v.status === 'overdue');
+                    if (due.length === 0) {
+                        showToast('No due or overdue vehicles to export.', 'info');
+                        return;
+                    }
+                    const rows = [['Registration', 'Make', 'Model', 'Customer', 'Phone', 'Email', 'MOT Expiry', 'Status']];
+                    due.forEach(v => {
+                        const cust = getCustomer(v.customerId);
+                        rows.push([
+                            v.regNumber, v.make, v.model,
+                            cust ? cust.name : '', cust ? cust.phone || '' : '', cust ? cust.email || '' : '',
+                            v.motExpiry || '', getStatusLabel(v.status)
+                        ]);
+                    });
+                    const csv = rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n');
+                    const blob = new Blob([csv], { type: 'text/csv' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `due-overdue-vehicles-${new Date().toISOString().slice(0, 10)}.csv`;
+                    a.click();
+                    URL.revokeObjectURL(url);
                 });
 
                 // Add Customer form handlers
