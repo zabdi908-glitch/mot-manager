@@ -6,6 +6,11 @@ const nodemailer = require('nodemailer');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Base URL of this app, used to build links in emails. Render automatically
+// sets RENDER_EXTERNAL_URL for web services — no need to configure it manually.
+// You can override it by setting PUBLIC_URL yourself if needed.
+const APP_URL = process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -116,6 +121,7 @@ function buildReminderEmail(customer, vehicle, days) {
     subject = `MOT reminder – ${vehicle.regNumber} due ${expiryUK}`;
     headline = `This is a friendly reminder that your MOT for ${vehicle.regNumber} is due on ${expiryUK} (${days} days from now).`;
   }
+  const bookingLink = `${APP_URL}/?reg=${encodeURIComponent(vehicle.regNumber)}`;
   const text =
 `Hi ${customer.name},
 
@@ -124,7 +130,10 @@ ${headline}
 Vehicle: ${vehicle.make} ${vehicle.model}
 Registration: ${vehicle.regNumber}
 
-Reply to this email or get in touch to book your test.
+Book your test online here:
+${bookingLink}
+
+Or reply to this email to arrange it directly.
 
 Thanks,
 The Workshop Team`;
