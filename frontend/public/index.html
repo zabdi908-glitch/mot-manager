@@ -119,6 +119,11 @@
         .footer-note { text-align: center; color: var(--text-muted); font-size: 0.8rem; margin-top: 1.5rem; }
         .hidden { display: none !important; }
 
+        .history-list { margin-top: 1.1rem; padding-top: 1rem; border-top: 1px dashed var(--border); }
+        .history-list .history-title { font-family: var(--font-display); text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.5rem; }
+        .history-row { display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--text-secondary); padding: 0.3rem 0; }
+        .history-row .h-status { font-weight: 600; text-transform: capitalize; }
+
         .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.8rem; margin-bottom: 1.4rem; }
         .step-card { background: var(--surface); border-radius: var(--radius-sm); box-shadow: var(--shadow); padding: 1rem 0.7rem; text-align: center; border-top: 3px dashed var(--border); }
         .step-card .step-num {
@@ -136,7 +141,7 @@
 
     <div class="header">
         <div class="logo-icon">MOT<br/>PASS</div>
-        <h1>MOT<span>Manager</span></h1>
+        <h1 id="businessName">MOT<span>Manager</span></h1>
         <p>Check your MOT status &amp; request a booking</p>
     </div>
 
@@ -171,6 +176,7 @@
             <span class="plate" id="resultPlate"></span>
             <div id="resultStamp"></div>
             <div class="result-meta" id="resultMeta"></div>
+            <div id="bookingHistory"></div>
         </div>
 
         <div class="card hidden" id="bookingCard">
@@ -260,6 +266,19 @@
                     document.getElementById('resultMeta').innerHTML =
                         `${vehicle.make || ''} ${vehicle.model || ''}<br/>MOT expiry: <strong>${formatDate(vehicle.motExpiry)}</strong>${daysText}`;
 
+                    const historyEl = document.getElementById('bookingHistory');
+                    if (vehicle.bookings && vehicle.bookings.length > 0) {
+                        historyEl.innerHTML = `<div class="history-list"><div class="history-title">Recent Bookings</div>` +
+                            vehicle.bookings.map(b => `
+                                <div class="history-row">
+                                    <span>${formatDate(b.date)} at ${(b.time || '').slice(0, 5)}</span>
+                                    <span class="h-status">${b.status}</span>
+                                </div>
+                            `).join('') + `</div>`;
+                    } else {
+                        historyEl.innerHTML = '';
+                    }
+
                     resultCard.classList.remove('hidden');
                     bookingCard.classList.remove('hidden');
                     document.getElementById('bookingSuccess').classList.add('hidden');
@@ -284,6 +303,16 @@
                 document.getElementById('regInput').value = regFromLink;
                 searchVehicle();
             }
+
+            // Load business name for the header (falls back to "MOT Manager" if unset)
+            fetch(`${API_BASE}/config`)
+                .then(res => res.ok ? res.json() : null)
+                .then(config => {
+                    if (config && config.businessName) {
+                        document.getElementById('businessName').textContent = config.businessName;
+                    }
+                })
+                .catch(() => {});
 
             document.getElementById('bookingDate').min = new Date().toISOString().split('T')[0];
 
