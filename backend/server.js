@@ -15,8 +15,15 @@ const APP_URL = process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || `ht
 app.use(cors());
 app.use(express.json());
 
-// Path to the JSON database file
-const DATA_FILE = path.join(__dirname, 'data.json');
+// Path to the JSON database file. On Render, the app's own disk is wiped on
+// every redeploy — set DATA_DIR to a Render Persistent Disk mount path (e.g.
+// /var/data) so this survives deploys. Falls back to the app folder for local dev.
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+const DATA_FILE = path.join(DATA_DIR, 'data.json');
+
+if (!process.env.DATA_DIR) {
+  console.warn('⚠️  DATA_DIR is not set — data.json is stored on ephemeral disk and will be lost on redeploy.');
+}
 
 // Helper: Read data from disk
 function readData() {
