@@ -65,18 +65,50 @@ function daysUntil(dateStr) {
 }
 
 // =========================
-//   ADMIN AUTH (Basic Auth)
+//   RATE LIMITING (no external deps — simple in-memory, per-IP)
+// =========================
+function rateLimit(maxRequests, windowMs) {
+  const hits = new Map(); // ip -> { count, resetAt }
+  return (req, res, next) => {
+    const ip = req.ip || req.connection.remoteAddress || 'unknown';
+    const now = Date.now();
+    const entry = hits.get(ip);
+    if (!entry || now > entry.resetAt) {
+      hits.set(ip, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+    if (entry.count >= maxRequests) {
+      return res.status(429).json({ error: 'Too many requests — please try again in a few minutes.' });
+    }
+    entry.count++;
+    next();
+  };
+}
+
+// =========================
+//   ADMIN AUTH (Basic Auth + brute-force lockout)
 // =========================
 // Protects the /admin page and every /api route except the public ones
 // registered below. Set ADMIN_PASSWORD (and optionally ADMIN_USER) as
 // environment variables on Render.
+const loginFailures = new Map(); // ip -> { count, lockedUntil }
+const MAX_LOGIN_ATTEMPTS = 6;
+const LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
+
 function requireAdminAuth(req, res, next) {
   const expectedUser = process.env.ADMIN_USER || 'admin';
   const expectedPass = process.env.ADMIN_PASSWORD;
+  const ip = req.ip || req.connection.remoteAddress || 'unknown';
 
   if (!expectedPass) {
     console.warn('⚠️  ADMIN_PASSWORD is not set — the admin area is currently UNPROTECTED.');
     return next();
+  }
+
+  const failRecord = loginFailures.get(ip);
+  if (failRecord && failRecord.lockedUntil && Date.now() < failRecord.lockedUntil) {
+    const minsLeft = Math.ceil((failRecord.lockedUntil - Date.now()) / 60000);
+    return res.status(429).send(`Too many failed login attempts. Try again in ${minsLeft} minute${minsLeft === 1 ? '' : 's'}.`);
   }
 
   const authHeader = req.headers.authorization;
@@ -91,8 +123,19 @@ function requireAdminAuth(req, res, next) {
   const pass = decoded.slice(separatorIdx + 1);
 
   if (user === expectedUser && pass === expectedPass) {
+    loginFailures.delete(ip); // reset on success
     return next();
   }
+
+  // Track the failure
+  const current = loginFailures.get(ip) || { count: 0, lockedUntil: null };
+  current.count += 1;
+  if (current.count >= MAX_LOGIN_ATTEMPTS) {
+    current.lockedUntil = Date.now() + LOCKOUT_MS;
+    console.warn(`⚠️  IP ${ip} locked out of admin login for ${LOCKOUT_MS / 60000} minutes after ${current.count} failed attempts.`);
+  }
+  loginFailures.set(ip, current);
+
   res.set('WWW-Authenticate', 'Basic realm="MOT Manager Admin"');
   return res.status(401).send('Invalid credentials');
 }
@@ -249,24 +292,62 @@ async function checkAndSendReminders() {
   if (changed) writeData(data);
 }
 
+// Weekly automated backup — emails the full dataset to you as a JSON attachment.
+// Set ADMIN_EMAIL to control where it's sent (defaults to EMAIL_USER, your Gmail).
+async function sendBackupEmail() {
+  if (!transporter) return;
+  const recipient = process.env.ADMIN_EMAIL || process.env.EMAIL_USER;
+  if (!recipient) return;
+  try {
+    const data = readData();
+    const dateStr = new Date().toISOString().slice(0, 10);
+    await transporter.sendMail({
+      from: `"${BUSINESS_NAME}" <${process.env.EMAIL_USER}>`,
+      to: recipient,
+      subject: `Weekly backup – ${BUSINESS_NAME} (${dateStr})`,
+      text: `Attached is your MOT Manager data backup as of ${dateStr}.\n\n${data.customers.length} customers, ${data.vehicles.length} vehicles, ${data.bookings.length} bookings.`,
+      attachments: [{
+        filename: `mot-manager-backup-${dateStr}.json`,
+        content: JSON.stringify(data, null, 2)
+      }]
+    });
+    console.log(`📦 Weekly backup email sent to ${recipient}`);
+  } catch (err) {
+    console.error('❌ Failed to send backup email:', err.message);
+  }
+}
+
 // =========================
 //   PUBLIC API (no auth) — MUST be registered before the admin auth
 //   middleware below, and must never return other customers' data.
 // =========================
+const publicApiLimiter = rateLimit(30, 15 * 60 * 1000); // 30 requests / 15 min / IP
+app.use('/api/public', publicApiLimiter);
+
+// Business name/phone for the public page header — safe to expose, no customer data
+app.get('/api/public/config', (req, res) => {
+  res.json({ businessName: BUSINESS_NAME, businessPhone: BUSINESS_PHONE });
+});
 
 // Look up a single vehicle's MOT status by registration number.
-// Returns only status info — no customer details, no other vehicles.
+// Returns only status info and that vehicle's own booking history — no customer details, no other vehicles.
 app.get('/api/public/vehicle/:reg', (req, res) => {
   const data = readData();
   const target = normalizeReg(req.params.reg);
   const vehicle = data.vehicles.find(v => normalizeReg(v.regNumber) === target);
   if (!vehicle) return res.status(404).json({ error: 'No vehicle found with that registration number' });
+  const bookings = data.bookings
+    .filter(b => b.vehicleId === vehicle.id)
+    .sort((a, b) => new Date(b.date) - new Date(a.date))
+    .slice(0, 5)
+    .map(b => ({ date: b.date, time: b.time, status: b.status }));
   res.json({
     regNumber: vehicle.regNumber,
     make: vehicle.make,
     model: vehicle.model,
     motExpiry: vehicle.motExpiry,
-    daysUntil: vehicle.motExpiry ? daysUntil(vehicle.motExpiry) : null
+    daysUntil: vehicle.motExpiry ? daysUntil(vehicle.motExpiry) : null,
+    bookings
   });
 });
 
@@ -308,6 +389,15 @@ app.use('/api', requireAdminAuth);
 
 app.get('/api/data', (req, res) => {
   res.json(readData());
+});
+
+// Download the full dataset as a JSON file (admin only — protected by the middleware above)
+app.get('/api/backup', (req, res) => {
+  const data = readData();
+  const filename = `mot-manager-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(JSON.stringify(data, null, 2));
 });
 
 // ----- CUSTOMERS -----
@@ -478,4 +568,5 @@ app.listen(PORT, () => {
   console.log(`✅ MOT Manager API running on port ${PORT}`);
   checkAndSendReminders();
   setInterval(checkAndSendReminders, 12 * 60 * 60 * 1000);
+  setInterval(sendBackupEmail, 7 * 24 * 60 * 60 * 1000);
 });
