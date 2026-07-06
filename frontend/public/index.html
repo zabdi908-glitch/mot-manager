@@ -278,6 +278,14 @@
                 if (e.key === 'Enter') searchVehicle();
             });
 
+            // If arriving from a reminder email link (?reg=AB12CDE), prefill and auto-search
+            const urlParams = new URLSearchParams(window.location.search);
+            const regFromLink = urlParams.get('reg');
+            if (regFromLink) {
+                document.getElementById('regInput').value = regFromLink;
+                searchVehicle();
+            }
+
             document.getElementById('bookingDate').min = new Date().toISOString().split('T')[0];
 
             document.getElementById('bookingForm').addEventListener('submit', async (e) => {
