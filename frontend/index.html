@@ -764,6 +764,7 @@
                             <span class="mot-date">MOT: <strong>${formatDate(v.motExpiry)}</strong> ${v.daysUntil !== null ? `(${v.daysUntil < 0 ? 'overdue' : v.daysUntil+' days'})` : ''}</span>
                             <div class="item-actions">
                                 <button class="btn-book" data-action="book" data-id="${v.id}">Book MOT</button>
+                                <button class="btn-outline" data-action="remind" data-id="${v.id}" style="padding:0.32rem 0.85rem;font-size:0.78rem;">Email Reminder</button>
                                 <button class="btn-edit" data-action="edit" data-id="${v.id}">Edit</button>
                                 <button class="btn-delete" data-action="delete" data-id="${v.id}">Delete</button>
                             </div>
@@ -774,6 +775,9 @@
                 container.querySelectorAll('[data-action="book"]').forEach(btn => {
                     btn.addEventListener('click', () => { switchTab('bookings'); document.getElementById('bookingVehicle').value = btn.dataset.id; });
                 });
+                container.querySelectorAll('[data-action="remind"]').forEach(btn => {
+                    btn.addEventListener('click', () => sendReminderNow(btn.dataset.id, btn));
+                });
                 container.querySelectorAll('[data-action="edit"]').forEach(btn => {
                     btn.addEventListener('click', () => openEditVehicleForm(btn.dataset.id));
                 });
@@ -783,6 +787,18 @@
                         deleteVehicle(btn.dataset.id, v ? v.regNumber : null);
                     });
                 });
+            }
+
+            async function sendReminderNow(vehicleId, btn) {
+                setButtonLoading(btn, true);
+                try {
+                    await apiCall('POST', `/vehicles/${vehicleId}/send-reminder`);
+                    showToast('Reminder email sent!', 'success');
+                } catch (err) {
+                    showToast(err.message || 'Could not send reminder email', 'error');
+                } finally {
+                    setButtonLoading(btn, false);
+                }
             }
 
             function renderAlerts() {
