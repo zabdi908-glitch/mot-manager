@@ -23,6 +23,8 @@ const DATA_FILE = path.join(DATA_DIR, 'data.json');
 
 if (!process.env.DATA_DIR) {
   console.warn('⚠️  DATA_DIR is not set — data.json is stored on ephemeral disk and will be lost on redeploy.');
+} else {
+  console.log(`💾 Using persistent data directory: ${DATA_DIR}`);
 }
 
 // Helper: Read data from disk
