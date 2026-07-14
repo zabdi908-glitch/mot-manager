@@ -887,17 +887,24 @@
                 });
                 container.querySelectorAll('[data-action="complete"]').forEach(btn => {
                     btn.addEventListener('click', async () => {
-                        const ok = await showConfirm(
-                            'Mark this MOT test as completed? This will remove it from Upcoming Bookings.',
-                            { title: 'Complete Booking', confirmLabel: 'Mark Complete', danger: false }
-                        );
-                        if (ok) updateBookingStatus(btn.dataset.id, 'completed');
-                    });
-                });
-                container.querySelectorAll('[data-action="cancel"]').forEach(btn => {
-                    btn.addEventListener('click', async () => {
-                        const ok = await showConfirm('Cancel this booking?', { title: 'Cancel Booking', confirmLabel: 'Yes, Cancel' });
-                        if (ok) updateBookingStatus(btn.dataset.id, 'cancelled');
+                        const booking = data.bookings.find(b => b.id === btn.dataset.id);
+                        if (!booking) return;
+
+                        const defaultNewExpiry = new Date();
+                        defaultNewExpiry.setFullYear(defaultNewExpiry.getFullYear() + 1);
+                        const defaultStr = defaultNewExpiry.toISOString().split('T')[0];
+
+                        const newExpiry = prompt('MOT passed! Enter the new MOT expiry date (YYYY-MM-DD):', defaultStr);
+                        if (newExpiry === null) return; // cancelled
+
+                        try {
+                            await updateBookingStatus(booking.id, 'completed');
+                            if (newExpiry && booking.vehicleId) {
+                                await updateVehicle(booking.vehicleId, { motExpiry: newExpiry });
+                            }
+                        } catch (err) {
+                            showToast(err.message || 'Something went wrong', 'error');
+                        }
                     });
                 });
             }
