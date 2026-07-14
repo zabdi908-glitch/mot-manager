@@ -881,15 +881,15 @@
                     </div>
                 `}).join('');
             container.querySelectorAll('[data-action="complete"]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-        const ok = await showConfirm(
-            'Mark this MOT test as completed? This will remove it from Upcoming Bookings.',
-            { title: 'Complete Booking', confirmLabel: 'Mark Complete', danger: false }
-        );
-        if (ok) updateBookingStatus(btn.dataset.id, 'completed');
-    });
-});
-           
+                    btn.addEventListener('click', async () => {
+                        const ok = await showConfirm(
+                            'Mark this MOT test as completed? This will remove it from Upcoming Bookings.',
+                            { title: 'Complete Booking', confirmLabel: 'Mark Complete', danger: false }
+                        );
+                        if (ok) updateBookingStatus(btn.dataset.id, 'completed');
+                    });
+                });
+            }
 
             function renderNotifications() {
                 const container = document.getElementById('notifList');
