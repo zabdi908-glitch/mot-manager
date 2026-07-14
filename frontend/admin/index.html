@@ -875,22 +875,21 @@
                         </div>
                         <div style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;">
                             <span class="b-status ${b.status}">${statusMap[b.status] || b.status}</span>
-                            ${b.status === 'pending' ? `<button class="btn-edit" style="padding:0.18rem 0.6rem;font-size:0.68rem;" data-action="confirm" data-id="${b.id}">Confirm</button>` : ''}
-                            ${b.status === 'pending' || b.status === 'confirmed' ? `<button class="btn-delete" style="padding:0.18rem 0.6rem;font-size:0.68rem;" data-action="cancel" data-id="${b.id}">Cancel</button>` : ''}
+                          ${b.status === 'confirmed' ? `<button class="btn-edit" style="padding:0.18rem 0.6rem;font-size:0.68rem;" data-action="complete" data-id="${b.id}">Mark Complete</button>` : ''}
+                          ${b.status === 'pending' || b.status === 'confirmed' ? `<button class="btn-delete" style="padding:0.18rem 0.6rem;font-size:0.68rem;" data-action="cancel" data-id="${b.id}">Cancel</button>` : ''}
                         </div>
                     </div>
                 `}).join('');
-
-                container.querySelectorAll('[data-action="confirm"]').forEach(btn => {
-                    btn.addEventListener('click', () => updateBookingStatus(btn.dataset.id, 'confirmed'));
-                });
-                container.querySelectorAll('[data-action="cancel"]').forEach(btn => {
-                    btn.addEventListener('click', async () => {
-                        const ok = await showConfirm('Cancel this booking?', { title: 'Cancel Booking', confirmLabel: 'Yes, Cancel' });
-                        if (ok) updateBookingStatus(btn.dataset.id, 'cancelled');
-                    });
-                });
-            }
+            container.querySelectorAll('[data-action="complete"]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+        const ok = await showConfirm(
+            'Mark this MOT test as completed? This will remove it from Upcoming Bookings.',
+            { title: 'Complete Booking', confirmLabel: 'Mark Complete', danger: false }
+        );
+        if (ok) updateBookingStatus(btn.dataset.id, 'completed');
+    });
+});
+           
 
             function renderNotifications() {
                 const container = document.getElementById('notifList');
