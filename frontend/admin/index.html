@@ -438,6 +438,26 @@
         </div>
     </div>
 
+    <!-- BOOK RETEST MODAL -->
+    <div class="modal-overlay" id="retestModal">
+        <div class="modal-box result-modal">
+            <h4>Book Retest</h4>
+            <p id="retestModalVehicle">Create a new booking for the failed MOT.</p>
+            <div class="form-group">
+                <label for="retestDate">Retest Date</label>
+                <input type="date" id="retestDate" />
+            </div>
+            <div class="form-group" style="margin-bottom:1.5rem;">
+                <label for="retestTime">Retest Time</label>
+                <input type="time" id="retestTime" />
+            </div>
+            <div class="modal-actions">
+                <button class="modal-btn-cancel" id="retestModalCancel">Cancel</button>
+                <button class="modal-btn-confirm primary-action" id="retestModalConfirm">Book Retest</button>
+            </div>
+        </div>
+    </div>
+
     <div class="app-wrapper" id="app">
         <!-- HEADER -->
         <header class="app-header">
@@ -847,6 +867,54 @@
                 });
             }
 
+            // ---------- BOOK RETEST MODAL ----------
+            // Resolves to { date, time } or null if cancelled.
+            function showRetestModal({ vehicleLabel = '', date = '', time = '09:00' } = {}) {
+                return new Promise((resolve) => {
+                    const overlay = document.getElementById('retestModal');
+                    const vehicleEl = document.getElementById('retestModalVehicle');
+                    const dateInput = document.getElementById('retestDate');
+                    const timeInput = document.getElementById('retestTime');
+                    const cancelBtn = document.getElementById('retestModalCancel');
+                    const confirmBtn = document.getElementById('retestModalConfirm');
+
+                    vehicleEl.textContent = vehicleLabel
+                        ? `Booking a retest for ${vehicleLabel}. A new pending booking will be created.`
+                        : 'Create a new booking for the failed MOT.';
+                    dateInput.value = date;
+                    timeInput.value = (time || '09:00').slice(0, 5);
+                    dateInput.min = new Date().toISOString().split('T')[0];
+
+                    overlay.classList.add('open');
+
+                    function cleanup(value) {
+                        overlay.classList.remove('open');
+                        cancelBtn.removeEventListener('click', onCancel);
+                        confirmBtn.removeEventListener('click', onConfirm);
+                        overlay.removeEventListener('click', onOverlayClick);
+                        document.removeEventListener('keydown', onKeydown);
+                        resolve(value);
+                    }
+                    function onCancel() { cleanup(null); }
+                    function onConfirm() {
+                        if (!dateInput.value) {
+                            showToast('Please choose a retest date.', 'warning');
+                            dateInput.focus();
+                            return;
+                        }
+                        cleanup({ date: dateInput.value, time: timeInput.value || '09:00' });
+                    }
+                    function onOverlayClick(e) { if (e.target === overlay) cleanup(null); }
+                    function onKeydown(e) { if (e.key === 'Escape') cleanup(null); }
+
+                    cancelBtn.addEventListener('click', onCancel);
+                    confirmBtn.addEventListener('click', onConfirm);
+                    overlay.addEventListener('click', onOverlayClick);
+                    document.addEventListener('keydown', onKeydown);
+                    confirmBtn.focus();
+                });
+            }
+
             // ---------- CANCEL MODAL (capture a cancellation reason) ----------
             // Resolves to { reason } or null if dismissed.
             function showCancelModal({ vehicleLabel = '' } = {}) {
@@ -1005,6 +1073,11 @@
                     ? 'Booking updated — confirmation email sent to the customer.'
                     : 'Booking updated. (No confirmation email — customer has no email on file.)',
                     'success');
+            }
+            async function createRetestBooking(originalId, date, time) {
+                await apiCall('POST', `/bookings/${originalId}/retest`, { date, time });
+                await fetchState();
+                showToast('Retest booked!', 'success');
             }
             async function cancelBooking(id, reason) {
                 const res = await apiCall('POST', `/bookings/${id}/cancel`, { reason });
@@ -1220,16 +1293,36 @@
                         const resultLabel = result === 'pass' ? 'Passed' : result === 'fail' ? 'Failed' : 'Completed';
                         const badgeClass = result === 'pass' ? 'result-pass' : result === 'fail' ? 'result-fail' : 'completed';
                         const completedOn = formatDateTime(b.completedAt) !== '—' ? formatDateTime(b.completedAt) : formatDate(b.date);
-                        const expiryLine = b.result === 'pass' && b.resultExpiry
-                            ? `<div class="timeline-detail">New expiry: <strong>${formatDate(b.resultExpiry)}</strong></div>`
-                            : (b.result === 'fail' ? `<div class="timeline-detail">Expiry unchanged — retest required</div>` : '');
+
+                        let detailLines = '';
+                        if (b.result === 'pass' && b.resultExpiry) {
+                            detailLines += `<div class="timeline-detail">New expiry: <strong>${formatDate(b.resultExpiry)}</strong></div>`;
+                        } else if (b.result === 'fail') {
+                            detailLines += `<div class="timeline-detail">Expiry unchanged — retest required</div>`;
+                            // Show the linked retest booking, if one has been created.
+                            const retest = data.bookings.find(x => x.retestOf === b.id);
+                            if (retest) {
+                                const statusMap = { pending: 'Pending', confirmed: 'Confirmed', completed: 'Completed', cancelled: 'Cancelled' };
+                                const rStatus = statusMap[retest.status] || retest.status;
+                                const rResult = retest.status === 'completed' && retest.result
+                                    ? (retest.result === 'pass' ? ' – Passed' : ' – Failed') : '';
+                                detailLines += `<div class="timeline-detail" style="color:var(--steel-blue);">↻ Retest booked for <strong>${formatDate(retest.date)}</strong> (${rStatus}${rResult})</div>`;
+                            }
+                        }
+                        // If this test is itself a retest, point back to the original failed booking.
+                        if (b.retestOf) {
+                            const original = data.bookings.find(x => x.id === b.retestOf);
+                            if (original) {
+                                detailLines += `<div class="timeline-detail" style="color:var(--steel-blue);">↻ Retest of the failed MOT on <strong>${formatDate(original.date)}</strong></div>`;
+                            }
+                        }
                         return `
                         <div class="timeline-item ${result}">
                             <div class="timeline-row">
                                 <span class="timeline-date">${completedOn}</span>
                                 <span class="b-status ${badgeClass}">${resultLabel}</span>
                             </div>
-                            ${expiryLine}
+                            ${detailLines}
                         </div>`;
                     }).join('') + `</div>`;
                 }
@@ -1294,6 +1387,7 @@
                             <div class="b-date">${formatDate(b.date)} at ${b.time.slice(0,5)}</div>
                             ${b.notes ? `<div style="font-size:0.75rem;color:var(--text-muted);">${b.notes}</div>` : ''}
                             ${b.status === 'cancelled' && b.cancellationReason ? `<div style="font-size:0.75rem;color:var(--hazard-red);">Reason: ${b.cancellationReason}</div>` : ''}
+                            ${b.retestOf ? `<div style="font-size:0.72rem;color:var(--steel-blue);font-weight:600;">↻ Retest of an earlier failed MOT</div>` : ''}
                         </div>
                         <div style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;">
                             <span class="b-status ${statusClass}">${statusText}</span>
@@ -1301,6 +1395,11 @@
                             ${b.status === 'confirmed' ? `<button class="btn-edit" style="padding:0.18rem 0.6rem;font-size:0.68rem;" data-action="complete" data-id="${b.id}">Mark Complete</button>` : ''}
                             ${b.status === 'pending' || b.status === 'confirmed' ? `<button class="btn-history" style="padding:0.18rem 0.6rem;font-size:0.68rem;" data-action="reschedule" data-id="${b.id}">Edit</button>` : ''}
                             ${b.status === 'pending' || b.status === 'confirmed' ? `<button class="btn-delete" style="padding:0.18rem 0.6rem;font-size:0.68rem;" data-action="cancel" data-id="${b.id}">Cancel</button>` : ''}
+                            ${b.status === 'completed' && b.result === 'fail'
+                                ? (data.bookings.some(x => x.retestOf === b.id)
+                                    ? `<span class="b-status pending" title="A retest has already been booked">Retest booked</span>`
+                                    : `<button class="btn-book" style="padding:0.18rem 0.7rem;font-size:0.68rem;" data-action="retest" data-id="${b.id}">Book Retest</button>`)
+                                : ''}
                         </div>
                     </div>
                 `}).join('');
@@ -1359,6 +1458,30 @@
                         if (!outcome) return;
                         try {
                             await cancelBooking(btn.dataset.id, outcome.reason);
+                        } catch (err) {
+                            showToast(err.message || 'Something went wrong', 'error');
+                        }
+                    });
+                });
+                container.querySelectorAll('[data-action="retest"]').forEach(btn => {
+                    btn.addEventListener('click', async () => {
+                        const booking = data.bookings.find(b => b.id === btn.dataset.id);
+                        if (!booking) return;
+                        const vehicle = getVehicle(booking.vehicleId);
+
+                        // Default the retest to 7 days after the failed test (editable in the modal).
+                        const defaultDate = new Date();
+                        defaultDate.setDate(defaultDate.getDate() + 7);
+                        const defaultStr = defaultDate.toISOString().split('T')[0];
+
+                        const outcome = await showRetestModal({
+                            vehicleLabel: vehicle ? vehicle.regNumber : '',
+                            date: defaultStr,
+                            time: booking.time
+                        });
+                        if (!outcome) return;
+                        try {
+                            await createRetestBooking(booking.id, outcome.date, outcome.time);
                         } catch (err) {
                             showToast(err.message || 'Something went wrong', 'error');
                         }

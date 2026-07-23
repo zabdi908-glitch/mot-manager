@@ -851,6 +851,35 @@ app.post('/api/bookings/:id/cancel', async (req, res) => {
   res.json({ booking, emailSent });
 });
 
+// Book a retest for a failed MOT. Creates a new pending booking for the same
+// vehicle, linked back to the original failed booking via retestOf.
+app.post('/api/bookings/:id/retest', (req, res) => {
+  const data = readData();
+  const original = data.bookings.find(b => b.id === req.params.id);
+  if (!original) return res.status(404).json({ error: 'Original booking not found' });
+  if (!(original.status === 'completed' && original.result === 'fail')) {
+    return res.status(400).json({ error: 'A retest can only be booked for a failed MOT' });
+  }
+  if (!req.body.date || !/^\d{4}-\d{2}-\d{2}$/.test(req.body.date)) {
+    return res.status(400).json({ error: 'A valid date (YYYY-MM-DD) is required' });
+  }
+
+  const booking = {
+    id: generateId(),
+    vehicleId: original.vehicleId,
+    date: req.body.date,
+    time: req.body.time || '09:00',
+    notes: req.body.notes ? String(req.body.notes).trim() : '',
+    status: 'pending',
+    retestOf: original.id,
+    source: 'retest',
+    createdAt: new Date().toISOString()
+  };
+  data.bookings.push(booking);
+  writeData(data);
+  res.status(201).json(booking);
+});
+
 app.delete('/api/bookings/:id', (req, res) => {
   const data = readData();
   data.bookings = data.bookings.filter(b => b.id !== req.params.id);
