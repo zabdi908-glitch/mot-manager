@@ -252,6 +252,95 @@ ${BUSINESS_NAME}`;
   return { subject, text, html };
 }
 
+function buildRescheduleEmail(customer, vehicle, booking) {
+  const dateUK = new Date(booking.date + 'T00:00:00').toLocaleDateString('en-GB', {
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+  });
+  const timeStr = (booking.time || '09:00').slice(0, 5);
+  const firstName = (customer.name || '').split(' ')[0] || customer.name;
+  const phoneLine = BUSINESS_PHONE ? `\nIf this new time doesn't suit you, just call us on ${BUSINESS_PHONE}.` : '';
+
+  const subject = `Your MOT booking has been updated – ${vehicle.regNumber}`;
+
+  const text =
+`Hi ${firstName},
+
+Your MOT booking has been rescheduled. Here are the updated details:
+
+Vehicle: ${vehicle.make} ${vehicle.model}
+Registration: ${vehicle.regNumber}
+New date: ${dateUK}
+New time: ${timeStr}
+${phoneLine}
+
+Thanks,
+${BUSINESS_NAME}`;
+
+  const html = `
+  <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 480px; margin: 0 auto; background: #f5f1e6;">
+    <div style="background: #1c2321; padding: 20px 24px; text-align: center;">
+      <div style="color: #ffd400; font-weight: bold; font-size: 18px; letter-spacing: 0.5px;">${BUSINESS_NAME}</div>
+    </div>
+    <div style="padding: 28px 24px;">
+      <p style="font-size: 16px; color: #1c2321; margin: 0 0 16px;">Hi ${firstName},</p>
+      <div style="display: inline-block; background: #2f51701a; color: #2f5170; border: 2px solid #2f5170; border-radius: 4px; padding: 4px 12px; font-size: 12px; font-weight: bold; letter-spacing: 1px; margin-bottom: 16px;">
+        BOOKING UPDATED
+      </div>
+      <p style="font-size: 15px; color: #333d3a; line-height: 1.5; margin: 0 0 20px;">Your MOT booking has been rescheduled. Here are the updated details:</p>
+
+      <table style="width: 100%; background: #fffdf8; border: 1px solid #d9d0ba; border-radius: 4px; border-collapse: collapse; margin-bottom: 24px;">
+        <tr>
+          <td style="padding: 12px 16px; color: #55605c; font-size: 13px;">Vehicle</td>
+          <td style="padding: 12px 16px; color: #1c2321; font-size: 13px; font-weight: bold; text-align: right;">${vehicle.make} ${vehicle.model}</td>
+        </tr>
+        <tr>
+          <td style="padding: 0 16px 12px; color: #55605c; font-size: 13px;">Registration</td>
+          <td style="padding: 0 16px 12px; text-align: right;">
+            <span style="display: inline-block; background: #ffd400; color: #1c2321; border: 2px solid #1c2321; border-radius: 3px; padding: 2px 8px; font-weight: bold; letter-spacing: 1px; font-size: 13px;">${vehicle.regNumber}</span>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 0 16px 12px; color: #55605c; font-size: 13px;">New date</td>
+          <td style="padding: 0 16px 12px; color: #1c2321; font-size: 13px; font-weight: bold; text-align: right;">${dateUK}</td>
+        </tr>
+        <tr>
+          <td style="padding: 0 16px 12px; color: #55605c; font-size: 13px;">New time</td>
+          <td style="padding: 0 16px 12px; color: #1c2321; font-size: 13px; font-weight: bold; text-align: right;">${timeStr}</td>
+        </tr>
+      </table>
+
+      <p style="font-size: 13px; color: #8b8f83; text-align: center; margin: 0;">
+        ${BUSINESS_PHONE ? `If this new time doesn't suit you, call us on ${BUSINESS_PHONE}` : 'If this new time doesn\'t suit you, just reply to this email'}
+      </p>
+    </div>
+    <div style="padding: 16px 24px; text-align: center; border-top: 1px solid #d9d0ba;">
+      <p style="font-size: 12px; color: #8b8f83; margin: 0;">${BUSINESS_NAME}</p>
+    </div>
+  </div>`;
+
+  return { subject, text, html };
+}
+
+async function sendRescheduleEmail(customer, vehicle, booking) {
+  if (!transporter) return false;
+  if (!customer || !customer.email) return false;
+  const { subject, text, html } = buildRescheduleEmail(customer, vehicle, booking);
+  try {
+    await transporter.sendMail({
+      from: `"${BUSINESS_NAME}" <${process.env.EMAIL_USER}>`,
+      to: customer.email,
+      subject,
+      text,
+      html
+    });
+    console.log(`✅ Reschedule email sent to ${customer.email} for ${vehicle.regNumber}`);
+    return true;
+  } catch (err) {
+    console.error(`❌ Failed to send reschedule email for ${vehicle.regNumber}:`, err.message);
+    return false;
+  }
+}
+
 async function sendReminderEmail(customer, vehicle, days) {
   if (!transporter) return false;
   if (!customer || !customer.email) return false;
@@ -559,6 +648,37 @@ app.post('/api/bookings/:id/complete', (req, res) => {
 
   writeData(data);
   res.json({ booking, vehicle });
+});
+
+// Reschedule a booking's date/time and email the customer the new details.
+// Only pending or confirmed bookings can be rescheduled. The email is best-effort:
+// if it can't be sent (email not configured, no customer email), the save still succeeds.
+app.put('/api/bookings/:id/reschedule', async (req, res) => {
+  const data = readData();
+  const booking = data.bookings.find(b => b.id === req.params.id);
+  if (!booking) return res.status(404).json({ error: 'Booking not found' });
+
+  if (booking.status === 'completed' || booking.status === 'cancelled') {
+    return res.status(400).json({ error: 'Only pending or confirmed bookings can be rescheduled' });
+  }
+  if (!req.body.date || !/^\d{4}-\d{2}-\d{2}$/.test(req.body.date)) {
+    return res.status(400).json({ error: 'A valid date (YYYY-MM-DD) is required' });
+  }
+
+  booking.date = req.body.date;
+  if (req.body.time) booking.time = req.body.time;
+  booking.updatedAt = new Date().toISOString();
+  writeData(data);
+
+  // Notify the customer of the new time (best-effort).
+  let emailSent = false;
+  const vehicle = data.vehicles.find(v => v.id === booking.vehicleId);
+  const customer = vehicle ? data.customers.find(c => c.id === vehicle.customerId) : null;
+  if (transporter && vehicle && customer && customer.email) {
+    emailSent = await sendRescheduleEmail(customer, vehicle, booking);
+  }
+
+  res.json({ booking, emailSent });
 });
 
 app.delete('/api/bookings/:id', (req, res) => {

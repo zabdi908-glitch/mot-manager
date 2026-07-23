@@ -393,6 +393,26 @@
         </div>
     </div>
 
+    <!-- RESCHEDULE BOOKING MODAL -->
+    <div class="modal-overlay" id="rescheduleModal">
+        <div class="modal-box result-modal">
+            <h4>Edit Booking</h4>
+            <p id="rescheduleModalVehicle">Update the date and time for this booking.</p>
+            <div class="form-group">
+                <label for="rescheduleDate">Date</label>
+                <input type="date" id="rescheduleDate" />
+            </div>
+            <div class="form-group" style="margin-bottom:1.5rem;">
+                <label for="rescheduleTime">Time</label>
+                <input type="time" id="rescheduleTime" />
+            </div>
+            <div class="modal-actions">
+                <button class="modal-btn-cancel" id="rescheduleModalCancel">Cancel</button>
+                <button class="modal-btn-confirm primary-action" id="rescheduleModalConfirm">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
     <div class="app-wrapper" id="app">
         <!-- HEADER -->
         <header class="app-header">
@@ -755,6 +775,53 @@
                 });
             }
 
+            // ---------- RESCHEDULE MODAL (edit a booking's date/time) ----------
+            // Resolves to { date, time } or null if cancelled.
+            function showRescheduleModal({ vehicleLabel = '', date = '', time = '09:00' } = {}) {
+                return new Promise((resolve) => {
+                    const overlay = document.getElementById('rescheduleModal');
+                    const vehicleEl = document.getElementById('rescheduleModalVehicle');
+                    const dateInput = document.getElementById('rescheduleDate');
+                    const timeInput = document.getElementById('rescheduleTime');
+                    const cancelBtn = document.getElementById('rescheduleModalCancel');
+                    const confirmBtn = document.getElementById('rescheduleModalConfirm');
+
+                    vehicleEl.textContent = vehicleLabel
+                        ? `Update the date and time for ${vehicleLabel}.`
+                        : 'Update the date and time for this booking.';
+                    dateInput.value = date;
+                    timeInput.value = (time || '09:00').slice(0, 5);
+
+                    overlay.classList.add('open');
+
+                    function cleanup(value) {
+                        overlay.classList.remove('open');
+                        cancelBtn.removeEventListener('click', onCancel);
+                        confirmBtn.removeEventListener('click', onConfirm);
+                        overlay.removeEventListener('click', onOverlayClick);
+                        document.removeEventListener('keydown', onKeydown);
+                        resolve(value);
+                    }
+                    function onCancel() { cleanup(null); }
+                    function onConfirm() {
+                        if (!dateInput.value) {
+                            showToast('Please choose a date.', 'warning');
+                            dateInput.focus();
+                            return;
+                        }
+                        cleanup({ date: dateInput.value, time: timeInput.value || '09:00' });
+                    }
+                    function onOverlayClick(e) { if (e.target === overlay) cleanup(null); }
+                    function onKeydown(e) { if (e.key === 'Escape') cleanup(null); }
+
+                    cancelBtn.addEventListener('click', onCancel);
+                    confirmBtn.addEventListener('click', onConfirm);
+                    overlay.addEventListener('click', onOverlayClick);
+                    document.addEventListener('keydown', onKeydown);
+                    confirmBtn.focus();
+                });
+            }
+
             // ---------- API CALLS ----------
             async function fetchState() {
                 try {
@@ -845,6 +912,14 @@
                 await fetchState();
                 showToast(result === 'pass' ? 'MOT passed — expiry updated.' : 'MOT recorded as failed.',
                     result === 'pass' ? 'success' : 'warning');
+            }
+            async function rescheduleBooking(id, date, time) {
+                const res = await apiCall('PUT', `/bookings/${id}/reschedule`, { date, time });
+                await fetchState();
+                showToast(res && res.emailSent
+                    ? 'Booking updated — confirmation email sent to the customer.'
+                    : 'Booking updated. (No confirmation email — customer has no email on file.)',
+                    'success');
             }
 
             // ----- NOTIFICATIONS -----
@@ -1130,6 +1205,7 @@
                             <span class="b-status ${statusClass}">${statusText}</span>
                             ${b.status === 'pending' ? `<button class="btn-edit" style="padding:0.18rem 0.6rem;font-size:0.68rem;" data-action="confirm" data-id="${b.id}">Confirm</button>` : ''}
                             ${b.status === 'confirmed' ? `<button class="btn-edit" style="padding:0.18rem 0.6rem;font-size:0.68rem;" data-action="complete" data-id="${b.id}">Mark Complete</button>` : ''}
+                            ${b.status === 'pending' || b.status === 'confirmed' ? `<button class="btn-history" style="padding:0.18rem 0.6rem;font-size:0.68rem;" data-action="reschedule" data-id="${b.id}">Edit</button>` : ''}
                             ${b.status === 'pending' || b.status === 'confirmed' ? `<button class="btn-delete" style="padding:0.18rem 0.6rem;font-size:0.68rem;" data-action="cancel" data-id="${b.id}">Cancel</button>` : ''}
                         </div>
                     </div>
@@ -1156,6 +1232,37 @@
 
                         try {
                             await completeBooking(booking.id, outcome.result, outcome.motExpiry);
+                        } catch (err) {
+                            showToast(err.message || 'Something went wrong', 'error');
+                        }
+                    });
+                });
+                container.querySelectorAll('[data-action="reschedule"]').forEach(btn => {
+                    btn.addEventListener('click', async () => {
+                        const booking = data.bookings.find(b => b.id === btn.dataset.id);
+                        if (!booking) return;
+
+                        const vehicle = getVehicle(booking.vehicleId);
+                        const outcome = await showRescheduleModal({
+                            vehicleLabel: vehicle ? vehicle.regNumber : '',
+                            date: booking.date,
+                            time: booking.time
+                        });
+                        if (!outcome) return; // cancelled
+
+                        try {
+                            await rescheduleBooking(booking.id, outcome.date, outcome.time);
+                        } catch (err) {
+                            showToast(err.message || 'Something went wrong', 'error');
+                        }
+                    });
+                });
+                container.querySelectorAll('[data-action="cancel"]').forEach(btn => {
+                    btn.addEventListener('click', async () => {
+                        const ok = await showConfirm('Cancel this booking?', { title: 'Cancel Booking', confirmLabel: 'Cancel Booking' });
+                        if (!ok) return;
+                        try {
+                            await updateBookingStatus(btn.dataset.id, 'cancelled');
                         } catch (err) {
                             showToast(err.message || 'Something went wrong', 'error');
                         }
