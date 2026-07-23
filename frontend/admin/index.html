@@ -271,6 +271,21 @@
         .timeline-detail strong { color: var(--ink); font-weight: 600; }
         .history-empty { text-align: center; padding: 2rem 1rem; color: var(--text-muted); }
         .history-empty .icon { font-size: 2.4rem; opacity: 0.6; margin-bottom: 0.4rem; }
+
+        /* reminder (email/SMS) history in the vehicle modal */
+        .history-subtitle { font-family: var(--font-display); text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.8rem; color: var(--text-secondary); margin: 1.4rem 0 0.7rem; padding-top: 1rem; border-top: 1px dashed var(--border); }
+        .rem-list { max-height: 200px; overflow-y: auto; }
+        .rem-item { display: flex; align-items: flex-start; gap: 0.6rem; padding: 0.5rem 0; border-bottom: 1px solid var(--border); }
+        .rem-item:last-child { border-bottom: none; }
+        .rem-channel { flex-shrink: 0; font-size: 0.6rem; font-weight: 700; padding: 0.2rem 0.5rem; border-radius: 40px; font-family: var(--font-display); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 0.1rem; }
+        .rem-channel.email { background: var(--steel-blue-bg); color: var(--steel-blue); }
+        .rem-channel.sms { background: var(--mot-green-bg); color: var(--mot-green); }
+        .rem-body { flex: 1; min-width: 0; }
+        .rem-body .rem-line { font-size: 0.85rem; color: var(--ink); }
+        .rem-body .rem-meta { font-size: 0.74rem; color: var(--text-muted); margin-top: 0.15rem; }
+        .rem-status { font-weight: 700; }
+        .rem-status.sent { color: var(--mot-green); }
+        .rem-status.failed { color: var(--hazard-red); }
         .btn-history { background: var(--steel-blue-bg); color: var(--steel-blue); border: 2px solid var(--steel-blue); }
         .btn-history:hover { background: var(--steel-blue); color: #fff; }
 
@@ -508,6 +523,7 @@
                 </div>
             </div>
             <div class="history-body" id="historyBody"></div>
+            <div id="historyReminders"></div>
             <div class="modal-actions">
                 <button class="modal-btn-cancel" id="historyModalClose">Close</button>
             </div>
@@ -1564,7 +1580,39 @@
                     }).join('') + `</div>`;
                 }
 
+                renderVehicleReminders(vehicleId);
                 document.getElementById('historyModal').classList.add('open');
+            }
+
+            // Email + SMS reminder history for a vehicle, newest first.
+            function renderVehicleReminders(vehicleId) {
+                const el = document.getElementById('historyReminders');
+                const stageLabels = { due_30: '30-day', due_7: '7-day', overdue: 'Overdue', manual: 'Manual' };
+                const reminders = (data.reminders || [])
+                    .filter(r => r.vehicleId === vehicleId)
+                    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+                let inner;
+                if (reminders.length === 0) {
+                    inner = `<div class="rem-item" style="border:none;color:var(--text-muted);font-size:0.85rem;">No email or SMS reminders sent yet.</div>`;
+                } else {
+                    inner = `<div class="rem-list">` + reminders.map(r => {
+                        const channel = r.channel === 'sms' ? 'sms' : 'email';
+                        const channelLabel = channel === 'sms' ? 'SMS' : 'Email';
+                        const stage = stageLabels[r.stage] || r.stage || '';
+                        const status = r.status === 'failed' ? 'failed' : 'sent';
+                        const failDetail = status === 'failed' && r.detail ? ` — ${escapeHtml(r.detail)}` : '';
+                        return `
+                        <div class="rem-item">
+                            <span class="rem-channel ${channel}">${channelLabel}</span>
+                            <div class="rem-body">
+                                <div class="rem-line">${stage} reminder${r.to ? ` to ${escapeHtml(r.to)}` : ''}</div>
+                                <div class="rem-meta"><span class="rem-status ${status}">${status}</span>${failDetail} · ${new Date(r.createdAt).toLocaleString('en-GB')}</div>
+                            </div>
+                        </div>`;
+                    }).join('') + `</div>`;
+                }
+                el.innerHTML = `<div class="history-subtitle">Reminders Sent (Email &amp; SMS)</div>${inner}`;
             }
 
             function closeVehicleHistory() {

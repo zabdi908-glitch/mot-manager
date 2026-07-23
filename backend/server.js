@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const https = require('https');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
 const app = express();
@@ -40,7 +41,7 @@ if (!process.env.DATA_DIR) {
 // Helper: Read data from disk
 function readData() {
   if (!fs.existsSync(DATA_FILE)) {
-    const defaultData = { customers: [], vehicles: [], bookings: [], notifications: [], staff: [], auditLog: [] };
+    const defaultData = { customers: [], vehicles: [], bookings: [], notifications: [], staff: [], auditLog: [], reminders: [] };
     fs.writeFileSync(DATA_FILE, JSON.stringify(defaultData, null, 2));
     return defaultData;
   }
@@ -52,6 +53,7 @@ function readData() {
   data.notifications = data.notifications || [];
   data.staff = data.staff || [];
   data.auditLog = data.auditLog || [];
+  data.reminders = data.reminders || [];
   return data;
 }
 
@@ -224,6 +226,85 @@ const transporter = emailConfigured
 
 if (!emailConfigured) {
   console.warn('⚠️  EMAIL_USER / EMAIL_PASS not set — MOT reminder emails are disabled.');
+}
+
+// =========================
+//   SMS (MOT REMINDERS via Twilio)
+// =========================
+// Entirely optional: if the three Twilio env vars aren't set, SMS silently
+// disables and only email reminders are sent. Calls Twilio's REST API directly
+// over HTTPS so there's no extra npm dependency to install.
+const smsConfigured = !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE_NUMBER);
+if (!smsConfigured) {
+  console.warn('⚠️  Twilio not configured (TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_PHONE_NUMBER) — MOT reminder SMS are disabled.');
+} else {
+  console.log('📱 Twilio SMS reminders enabled.');
+}
+
+// Best-effort conversion of a stored phone number to E.164 (e.g. +447700900123),
+// which Twilio requires. Defaults to a UK country code; override with SMS_COUNTRY_CODE.
+function toE164(phone) {
+  if (!phone) return null;
+  let p = String(phone).replace(/[\s()\-.]/g, '');
+  if (!p) return null;
+  if (p.startsWith('+')) return p;
+  const cc = process.env.SMS_COUNTRY_CODE || '+44';
+  if (p.startsWith('00')) return '+' + p.slice(2);
+  if (p.startsWith('0')) return cc + p.slice(1);
+  return cc + p; // assume national number without trunk zero
+}
+
+// POST a message to Twilio's Messages API. Resolves { ok, error } — never throws.
+function sendTwilioSms(to, body) {
+  return new Promise((resolve) => {
+    const sid = process.env.TWILIO_ACCOUNT_SID;
+    const token = process.env.TWILIO_AUTH_TOKEN;
+    const from = process.env.TWILIO_PHONE_NUMBER;
+    const postData = new URLSearchParams({ To: to, From: from, Body: body }).toString();
+    const options = {
+      hostname: 'api.twilio.com',
+      path: `/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`,
+      method: 'POST',
+      auth: `${sid}:${token}`,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': Buffer.byteLength(postData)
+      }
+    };
+    const req = https.request(options, (res) => {
+      let chunks = '';
+      res.on('data', (d) => { chunks += d; });
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          resolve({ ok: true });
+        } else {
+          let msg = `HTTP ${res.statusCode}`;
+          try { const j = JSON.parse(chunks); if (j.message) msg = j.message; } catch (e) {}
+          resolve({ ok: false, error: msg });
+        }
+      });
+    });
+    req.on('error', (e) => resolve({ ok: false, error: e.message }));
+    req.write(postData);
+    req.end();
+  });
+}
+
+// Record a reminder that was sent (or attempted) so the admin can review the
+// per-vehicle email/SMS history. Mutates data; caller writes.
+function logReminder(data, vehicle, channel, to, stage, status, detail) {
+  if (!Array.isArray(data.reminders)) data.reminders = [];
+  data.reminders.unshift({
+    id: generateId(),
+    vehicleId: vehicle.id,
+    channel,               // 'email' | 'sms'
+    to: to || '',
+    stage,                 // 'due_30' | 'due_7' | 'overdue' | 'manual'
+    status,                // 'sent' | 'failed'
+    detail: detail || '',
+    createdAt: new Date().toISOString()
+  });
+  if (data.reminders.length > 2000) data.reminders.length = 2000;
 }
 
 function getStage(days) {
@@ -573,18 +654,58 @@ async function sendReminderEmail(customer, vehicle, days) {
   }
 }
 
+// Short SMS version of the MOT reminder — includes reg, expiry date and a booking link.
+function buildReminderSms(customer, vehicle, days) {
+  const expiryUK = new Date(vehicle.motExpiry + 'T00:00:00').toLocaleDateString('en-GB', {
+    day: 'numeric', month: 'short', year: 'numeric'
+  });
+  const bookingLink = `${APP_URL}/?reg=${encodeURIComponent(vehicle.regNumber)}`;
+  let lead;
+  if (days < 0) {
+    const ago = Math.abs(days);
+    lead = `Your MOT for ${vehicle.regNumber} expired on ${expiryUK} (${ago} day${ago === 1 ? '' : 's'} ago). Please book ASAP.`;
+  } else if (days <= 7) {
+    lead = `Your MOT for ${vehicle.regNumber} is due on ${expiryUK} (in ${days} day${days === 1 ? '' : 's'}).`;
+  } else {
+    lead = `Reminder: MOT for ${vehicle.regNumber} is due on ${expiryUK}.`;
+  }
+  return `${BUSINESS_NAME}: ${lead} Book: ${bookingLink}`;
+}
+
+// Send an SMS reminder via Twilio. Resolves { ok, error, skipped } — never throws.
+async function sendReminderSms(customer, vehicle, days) {
+  if (!smsConfigured) return { ok: false, skipped: true };
+  if (!customer || !customer.phone) return { ok: false, error: 'no phone number on file' };
+  const to = toE164(customer.phone);
+  if (!to) return { ok: false, error: 'invalid phone number' };
+  const body = buildReminderSms(customer, vehicle, days);
+  const result = await sendTwilioSms(to, body);
+  if (result.ok) console.log(`📱 Reminder SMS sent to ${to} for ${vehicle.regNumber}`);
+  else console.error(`❌ Failed to send reminder SMS for ${vehicle.regNumber}: ${result.error}`);
+  return result;
+}
+
 async function checkAndSendReminders() {
-  if (!transporter) return;
+  // Run if either channel is available.
+  if (!transporter && !smsConfigured) return;
   const data = readData();
   let changed = false;
   for (const vehicle of data.vehicles) {
     if (!vehicle.motExpiry) continue;
     const days = daysUntil(vehicle.motExpiry);
     const stage = getStage(days);
+    // emailStage gates BOTH channels, so email + SMS fire together, once per stage.
     if (stage && stage !== vehicle.emailStage) {
       const customer = data.customers.find(c => c.id === vehicle.customerId);
-      if (customer && customer.email) {
-        await sendReminderEmail(customer, vehicle, days);
+      if (customer) {
+        if (transporter && customer.email) {
+          const sent = await sendReminderEmail(customer, vehicle, days);
+          logReminder(data, vehicle, 'email', customer.email, stage, sent ? 'sent' : 'failed');
+        }
+        if (smsConfigured && customer.phone) {
+          const r = await sendReminderSms(customer, vehicle, days);
+          logReminder(data, vehicle, 'sms', toE164(customer.phone), stage, r.ok ? 'sent' : 'failed', r.error || '');
+        }
       }
       vehicle.emailStage = stage;
       changed = true;
@@ -948,6 +1069,8 @@ app.post('/api/vehicles/:id/send-reminder', async (req, res) => {
   }
   const days = daysUntil(vehicle.motExpiry);
   const sent = await sendReminderEmail(customer, vehicle, days);
+  logReminder(data, vehicle, 'email', customer.email, 'manual', sent ? 'sent' : 'failed');
+  writeData(data);
   if (!sent) return res.status(500).json({ error: 'Failed to send email' });
   res.json({ success: true });
 });
