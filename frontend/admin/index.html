@@ -240,6 +240,40 @@
         .b-status.result-pass { background: var(--mot-green-bg); color: var(--mot-green); }
         .b-status.result-fail { background: var(--hazard-red-bg); color: var(--hazard-red); }
 
+        /* ---------- VEHICLE MOT HISTORY MODAL ---------- */
+        .modal-box.history-modal { max-width: 560px; border-top: 3px dashed var(--steel-blue); text-align: left; }
+        .history-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 1.3rem; }
+        .history-head p { margin: 0.35rem 0 0; }
+        .history-count {
+            flex-shrink: 0; display: inline-flex; flex-direction: column; align-items: center;
+            background: var(--ink); color: var(--plate-yellow); border-radius: var(--radius-sm);
+            padding: 0.5rem 0.9rem; line-height: 1.05; min-width: 4.2rem;
+        }
+        .history-count .num { font-family: var(--font-display); font-size: 1.5rem; font-weight: 600; }
+        .history-count .cap { font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.85; }
+        .history-body { max-height: 340px; overflow-y: auto; margin-bottom: 1.5rem; }
+
+        /* timeline */
+        .timeline { position: relative; padding-left: 1.4rem; }
+        .timeline::before { content: ''; position: absolute; left: 5px; top: 6px; bottom: 6px; width: 2px; background: var(--border); }
+        .timeline-item { position: relative; padding: 0 0 1.1rem 0.5rem; }
+        .timeline-item:last-child { padding-bottom: 0; }
+        .timeline-item::before {
+            content: ''; position: absolute; left: -1.4rem; top: 4px; width: 12px; height: 12px;
+            border-radius: 50%; border: 2px solid var(--surface); background: var(--text-muted);
+            box-shadow: 0 0 0 2px var(--border);
+        }
+        .timeline-item.pass::before { background: var(--mot-green); box-shadow: 0 0 0 2px var(--mot-green); }
+        .timeline-item.fail::before { background: var(--hazard-red); box-shadow: 0 0 0 2px var(--hazard-red); }
+        .timeline-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+        .timeline-date { font-family: var(--font-display); font-weight: 600; font-size: 0.95rem; letter-spacing: 0.01em; }
+        .timeline-detail { font-size: 0.82rem; color: var(--text-secondary); margin-top: 0.2rem; }
+        .timeline-detail strong { color: var(--ink); font-weight: 600; }
+        .history-empty { text-align: center; padding: 2rem 1rem; color: var(--text-muted); }
+        .history-empty .icon { font-size: 2.4rem; opacity: 0.6; margin-bottom: 0.4rem; }
+        .btn-history { background: var(--steel-blue-bg); color: var(--steel-blue); border: 2px solid var(--steel-blue); }
+        .btn-history:hover { background: var(--steel-blue); color: #fff; }
+
         /* ---------- BOOKING SECTION ---------- */
         .booking-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; }
         @media (max-width: 800px) { .booking-grid { grid-template-columns: 1fr; } }
@@ -335,6 +369,26 @@
             <div class="modal-actions">
                 <button class="modal-btn-cancel" id="completeModalCancel">Cancel</button>
                 <button class="modal-btn-confirm primary-action" id="completeModalConfirm">Save Result</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- VEHICLE MOT HISTORY MODAL -->
+    <div class="modal-overlay" id="historyModal">
+        <div class="modal-box history-modal">
+            <div class="history-head">
+                <div>
+                    <h4>MOT History</h4>
+                    <p id="historyVehicleLabel">—</p>
+                </div>
+                <div class="history-count">
+                    <span class="num" id="historyCount">0</span>
+                    <span class="cap" id="historyCountCap">MOTs</span>
+                </div>
+            </div>
+            <div class="history-body" id="historyBody"></div>
+            <div class="modal-actions">
+                <button class="modal-btn-cancel" id="historyModalClose">Close</button>
             </div>
         </div>
     </div>
@@ -919,6 +973,7 @@
                             <span class="mot-date">MOT: <strong>${formatDate(v.motExpiry)}</strong> ${v.daysUntil !== null ? `(${v.daysUntil < 0 ? 'overdue' : v.daysUntil+' days'})` : ''}</span>
                             <div class="item-actions">
                                 <button class="btn-book" data-action="book" data-id="${v.id}">Book MOT</button>
+                                <button class="btn-history" data-action="history" data-id="${v.id}">History</button>
                                 <button class="btn-outline" data-action="remind" data-id="${v.id}" style="padding:0.32rem 0.85rem;font-size:0.78rem;">Email Reminder</button>
                                 <button class="btn-edit" data-action="edit" data-id="${v.id}">Edit</button>
                                 <button class="btn-delete" data-action="delete" data-id="${v.id}">Delete</button>
@@ -929,6 +984,9 @@
 
                 container.querySelectorAll('[data-action="book"]').forEach(btn => {
                     btn.addEventListener('click', () => { switchTab('bookings'); document.getElementById('bookingVehicle').value = btn.dataset.id; });
+                });
+                container.querySelectorAll('[data-action="history"]').forEach(btn => {
+                    btn.addEventListener('click', () => openVehicleHistory(btn.dataset.id));
                 });
                 container.querySelectorAll('[data-action="remind"]').forEach(btn => {
                     btn.addEventListener('click', () => sendReminderNow(btn.dataset.id, btn));
@@ -954,6 +1012,65 @@
                 } finally {
                     setButtonLoading(btn, false);
                 }
+            }
+
+            // ---------- VEHICLE MOT HISTORY ----------
+            function formatDateTime(iso) {
+                if (!iso) return '—';
+                const d = new Date(iso);
+                if (isNaN(d)) return '—';
+                return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+            }
+
+            function openVehicleHistory(vehicleId) {
+                const vehicle = getVehicle(vehicleId);
+                if (!vehicle) return;
+
+                // All completed MOT bookings for this vehicle, newest first. Fall back to
+                // the booking date when an older record has no completedAt timestamp.
+                const completed = data.bookings
+                    .filter(b => b.vehicleId === vehicleId && b.status === 'completed')
+                    .sort((a, b) => {
+                        const at = new Date(a.completedAt || a.date + 'T00:00:00').getTime();
+                        const bt = new Date(b.completedAt || b.date + 'T00:00:00').getTime();
+                        return bt - at;
+                    });
+
+                const cust = getCustomer(vehicle.customerId);
+                document.getElementById('historyVehicleLabel').innerHTML =
+                    `<span class="plate">${vehicle.regNumber}</span> &nbsp;${vehicle.make} ${vehicle.model}` +
+                    (cust ? ` · ${cust.name}` : '');
+                document.getElementById('historyCount').textContent = completed.length;
+                document.getElementById('historyCountCap').textContent = completed.length === 1 ? 'MOT' : 'MOTs';
+
+                const body = document.getElementById('historyBody');
+                if (completed.length === 0) {
+                    body.innerHTML = `<div class="history-empty"><div class="icon">🗓️</div><p>No completed MOTs recorded for this vehicle yet.</p></div>`;
+                } else {
+                    body.innerHTML = `<div class="timeline">` + completed.map(b => {
+                        const result = b.result || 'completed';
+                        const resultLabel = result === 'pass' ? 'Passed' : result === 'fail' ? 'Failed' : 'Completed';
+                        const badgeClass = result === 'pass' ? 'result-pass' : result === 'fail' ? 'result-fail' : 'completed';
+                        const completedOn = formatDateTime(b.completedAt) !== '—' ? formatDateTime(b.completedAt) : formatDate(b.date);
+                        const expiryLine = b.result === 'pass' && b.resultExpiry
+                            ? `<div class="timeline-detail">New expiry: <strong>${formatDate(b.resultExpiry)}</strong></div>`
+                            : (b.result === 'fail' ? `<div class="timeline-detail">Expiry unchanged — retest required</div>` : '');
+                        return `
+                        <div class="timeline-item ${result}">
+                            <div class="timeline-row">
+                                <span class="timeline-date">${completedOn}</span>
+                                <span class="b-status ${badgeClass}">${resultLabel}</span>
+                            </div>
+                            ${expiryLine}
+                        </div>`;
+                    }).join('') + `</div>`;
+                }
+
+                document.getElementById('historyModal').classList.add('open');
+            }
+
+            function closeVehicleHistory() {
+                document.getElementById('historyModal').classList.remove('open');
             }
 
             function renderAlerts() {
@@ -1312,6 +1429,14 @@
                     } finally {
                         setButtonLoading(submitBtn, false);
                     }
+                });
+
+                // Vehicle history modal — close via button, overlay click, or Escape
+                const historyModal = document.getElementById('historyModal');
+                document.getElementById('historyModalClose').addEventListener('click', closeVehicleHistory);
+                historyModal.addEventListener('click', (e) => { if (e.target === historyModal) closeVehicleHistory(); });
+                document.addEventListener('keydown', (e) => {
+                    if (e.key === 'Escape' && historyModal.classList.contains('open')) closeVehicleHistory();
                 });
 
                 // Notifications

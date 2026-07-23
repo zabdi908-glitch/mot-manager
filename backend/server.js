@@ -544,6 +544,9 @@ app.post('/api/bookings/:id/complete', (req, res) => {
   booking.status = 'completed';
   booking.result = result;
   booking.completedAt = new Date().toISOString();
+  // Record the expiry this test produced (pass only) so the vehicle's MOT
+  // history can show it even after the vehicle's current expiry moves on.
+  booking.resultExpiry = result === 'pass' ? newExpiry : null;
 
   let vehicle = null;
   if (result === 'pass' && booking.vehicleId) {
