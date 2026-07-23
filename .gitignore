@@ -1,0 +1,9 @@
+# Dependencies
+node_modules/
+
+# Local data store (created at runtime; may hold real customer data)
+data.json
+backend/data.json
+
+# Logs
+*.log

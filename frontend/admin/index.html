@@ -324,9 +324,77 @@
             .form-card { padding: 1.2rem; }
             .toast-container { right: 1rem; left: 1rem; max-width: 100%; }
         }
+        /* ---------- LOGIN SCREEN ---------- */
+        .login-overlay {
+            position: fixed; inset: 0; z-index: 10001; background: var(--ink);
+            background-image: radial-gradient(rgba(255,212,0,0.06) 1px, transparent 1px); background-size: 22px 22px;
+            display: flex; align-items: center; justify-content: center; padding: 1.5rem;
+        }
+        .login-overlay.hidden { display: none !important; }
+        .login-card {
+            background: var(--surface); border-radius: var(--radius); box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+            width: 100%; max-width: 380px; padding: 2.2rem 2rem; border-top: 4px solid var(--plate-yellow);
+        }
+        .login-logo { text-align: center; margin-bottom: 1.6rem; }
+        .login-logo .logo-icon {
+            width: 54px; height: 54px; border-radius: 50%; border: 2.5px dashed var(--plate-yellow-dark);
+            display: flex; align-items: center; justify-content: center; color: var(--ink);
+            font-weight: 700; font-size: 0.85rem; font-family: var(--font-display); letter-spacing: 0.03em;
+            transform: rotate(-8deg); margin: 0 auto 0.7rem; text-align: center; line-height: 1.05; background: var(--plate-yellow);
+        }
+        .login-logo h1 { font-family: var(--font-display); text-transform: uppercase; font-size: 1.35rem; letter-spacing: 0.02em; }
+        .login-logo p { font-size: 0.78rem; color: var(--text-muted); letter-spacing: 0.06em; text-transform: uppercase; margin-top: 0.2rem; }
+        .login-card .form-group { margin-bottom: 1rem; }
+        .login-error { color: var(--hazard-red); font-size: 0.85rem; margin-top: 0.8rem; text-align: center; min-height: 1rem; }
+
+        /* ---------- HEADER USER BADGE ---------- */
+        .user-badge {
+            display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.9rem; background: var(--ink-soft);
+            border-radius: 40px; font-size: 0.82rem; color: var(--paper); border: 1px solid rgba(245,241,230,0.15);
+        }
+        .user-badge .u-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--mot-green); box-shadow: 0 0 0 2px rgba(43,93,52,0.35); }
+        .user-badge strong { color: var(--plate-yellow); font-weight: 600; }
+        .user-badge .u-role { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.06em; background: var(--plate-yellow); color: var(--ink); padding: 0.05rem 0.4rem; border-radius: 40px; font-weight: 700; }
+
+        /* ---------- STAFF & AUDIT ---------- */
+        .staff-item { background: var(--surface); border-radius: var(--radius-sm); box-shadow: var(--shadow); padding: 1rem 1.3rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; border-left: 3px solid var(--steel-blue); flex-wrap: wrap; }
+        .staff-item .s-name { font-family: var(--font-display); font-size: 1.05rem; font-weight: 600; }
+        .staff-item .s-sub { color: var(--text-secondary); font-size: 0.85rem; }
+        .staff-item .role-tag { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.06em; padding: 0.15rem 0.5rem; border-radius: 40px; font-weight: 700; font-family: var(--font-display); }
+        .staff-item .role-tag.admin { background: var(--plate-yellow); color: var(--ink); }
+        .staff-item .role-tag.staff { background: var(--steel-blue-bg); color: var(--steel-blue); }
+        .staff-item.is-you { border-left-color: var(--mot-green); }
+        .audit-list { max-height: 420px; overflow-y: auto; }
+        .audit-item { background: var(--surface); border-radius: var(--radius-sm); padding: 0.7rem 1.1rem; margin-bottom: 0.5rem; border-left: 3px solid var(--border); font-size: 0.88rem; }
+        .audit-item .a-details { color: var(--ink); }
+        .audit-item .a-meta { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.2rem; }
+        .audit-item .a-meta strong { color: var(--steel-blue); }
     </style>
 </head>
 <body>
+
+    <!-- LOGIN SCREEN (shown until a staff member is authenticated) -->
+    <div class="login-overlay" id="loginOverlay">
+        <div class="login-card">
+            <div class="login-logo">
+                <div class="logo-icon">MOT<br/>PASS</div>
+                <h1>MOT Manager</h1>
+                <p>Staff Sign In</p>
+            </div>
+            <form id="loginForm" autocomplete="off">
+                <div class="form-group">
+                    <label for="loginUsername">Username</label>
+                    <input type="text" id="loginUsername" autocomplete="username" required />
+                </div>
+                <div class="form-group">
+                    <label for="loginPassword">Password</label>
+                    <input type="password" id="loginPassword" autocomplete="current-password" required />
+                </div>
+                <button type="submit" class="btn-primary" id="loginSubmitBtn"><span class="btn-label">Sign In</span></button>
+                <div class="login-error" id="loginError"></div>
+            </form>
+        </div>
+    </div>
 
     <!-- FULL-PAGE LOADING OVERLAY (shown until first data load completes) -->
     <div class="loading-overlay" id="loadingOverlay">
@@ -469,11 +537,16 @@
                 </div>
             </div>
             <div class="header-actions">
+                <span class="user-badge" id="userBadge" title="Logged in staff member">
+                    <span class="u-dot"></span> Logged in as: <strong id="userName">—</strong>
+                    <span class="u-role" id="userRole" style="display:none;">staff</span>
+                </span>
                 <button class="notif-badge" id="notifBell" title="View notifications">
                     Alerts <span id="notifCount" class="count">0</span>
                 </button>
                 <button class="btn-outline" id="addVehicleBtn" style="padding:0.5rem 1.3rem;">+ Add Vehicle</button>
-                <a class="btn-outline" href="/api/backup" style="padding:0.5rem 1.3rem;display:inline-block;">Backup</a>
+                <button class="btn-outline" id="backupBtn" style="padding:0.5rem 1.3rem;">Backup</button>
+                <button class="btn-outline" id="logoutBtn" style="padding:0.5rem 1.3rem;">Log Out</button>
             </div>
         </header>
 
@@ -484,6 +557,7 @@
             <button class="nav-tab" data-panel="bookings">Bookings</button>
             <button class="nav-tab" data-panel="notifications">Notifications</button>
             <button class="nav-tab" data-panel="customers">Customers</button>
+            <button class="nav-tab" data-panel="staff" id="staffTab" style="display:none;">Staff</button>
         </nav>
 
         <div class="panel-body">
@@ -647,6 +721,45 @@
             <input type="text" id="customerSearch" placeholder="Search by name, phone or email..." style="width:100%;margin-bottom:1rem;" />
             <div id="customerList" class="list-grid"></div>
         </section>
+
+        <!-- ========== PANEL: STAFF (admins only) ========== -->
+        <section class="panel" id="panel-staff">
+            <div class="form-card" style="max-width:100%;">
+                <h3>Add Staff Member</h3>
+                <form id="staffForm" autocomplete="off">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="staffName">Full Name</label>
+                            <input type="text" id="staffName" placeholder="e.g. Jane Doe" required />
+                        </div>
+                        <div class="form-group">
+                            <label for="staffUsername">Username</label>
+                            <input type="text" id="staffUsername" placeholder="e.g. jane" autocomplete="off" required />
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="staffPassword">Password (min 6 chars)</label>
+                            <input type="password" id="staffPassword" placeholder="Set a password" autocomplete="new-password" required />
+                        </div>
+                        <div class="form-group">
+                            <label for="staffRole">Role</label>
+                            <select id="staffRole">
+                                <option value="staff">Staff</option>
+                                <option value="admin">Admin (can manage staff)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn-primary" id="staffSubmitBtn"><span class="btn-label">Add Staff Member</span></button>
+                </form>
+            </div>
+
+            <h3 style="margin-bottom:1rem;">Staff Accounts</h3>
+            <div id="staffList" class="list-grid" style="margin-bottom:2rem;"></div>
+
+            <h3 style="margin-bottom:1rem;">Recent Activity</h3>
+            <div id="auditList" class="audit-list"></div>
+        </section>
         </div>
     </div>
 
@@ -663,6 +776,11 @@
             const API_BASE = '/api';
             let data = { customers: [], vehicles: [], bookings: [], notifications: [] };
             let firstLoadDone = false;
+
+            // ---------- AUTH STATE ----------
+            const TOKEN_KEY = 'motStaffToken';
+            let authToken = localStorage.getItem(TOKEN_KEY) || null;
+            let currentUser = null; // { name, username, role }
 
             // ---------- HELPERS ----------
             function formatDate(dateStr) {
@@ -976,9 +1094,26 @@
             }
 
             // ---------- API CALLS ----------
+            // Builds request headers, attaching the bearer token when logged in.
+            function authHeaders(extra = {}) {
+                const h = { ...extra };
+                if (authToken) h['Authorization'] = `Bearer ${authToken}`;
+                return h;
+            }
+
+            // A 401 means the session expired or is invalid — drop the token and
+            // send the user back to the login screen.
+            function handleUnauthorized() {
+                authToken = null;
+                currentUser = null;
+                localStorage.removeItem(TOKEN_KEY);
+                showLogin();
+            }
+
             async function fetchState() {
                 try {
-                    const res = await fetch(`${API_BASE}/data`);
+                    const res = await fetch(`${API_BASE}/data`, { headers: authHeaders() });
+                    if (res.status === 401) { handleUnauthorized(); return; }
                     if (!res.ok) throw new Error('Failed to fetch data');
                     data = await res.json();
                     renderAll();
@@ -994,9 +1129,10 @@
             }
 
             async function apiCall(method, endpoint, body = null) {
-                const opts = { method, headers: { 'Content-Type': 'application/json' } };
+                const opts = { method, headers: authHeaders({ 'Content-Type': 'application/json' }) };
                 if (body) opts.body = JSON.stringify(body);
                 const res = await fetch(`${API_BASE}${endpoint}`, opts);
+                if (res.status === 401) { handleUnauthorized(); throw new Error('Your session has expired. Please log in again.'); }
                 if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || 'Request failed'); }
                 return res.status === 204 ? null : await res.json();
             }
@@ -1545,6 +1681,7 @@
                 if (panel) panel.classList.add('active');
                 if (panelId !== 'vehicles') document.getElementById('vehicleFormCard').style.display = 'none';
                 if (panelId !== 'customers') document.getElementById('customerFormCard').style.display = 'none';
+                if (panelId === 'staff') loadStaffAndAudit();
             }
 
             // ---------- FORM HANDLING (VEHICLES) ----------
@@ -1607,6 +1744,156 @@
                 document.getElementById('customerFormTitle').textContent = 'Add Customer';
                 document.querySelector('#custFormSubmitBtn .btn-label').textContent = 'Save Customer';
                 document.getElementById('customerFormCard').style.display = 'none';
+            }
+
+            // ---------- AUTH ----------
+            function showLogin() {
+                document.getElementById('loginOverlay').classList.remove('hidden');
+                document.getElementById('app').style.display = 'none';
+                const err = document.getElementById('loginError');
+                if (err) err.textContent = '';
+                const u = document.getElementById('loginUsername');
+                if (u) u.focus();
+            }
+
+            function showApp() {
+                document.getElementById('loginOverlay').classList.add('hidden');
+                document.getElementById('app').style.display = '';
+            }
+
+            // Reflect the current user in the header and toggle admin-only UI.
+            function applyUserToUI() {
+                if (!currentUser) return;
+                document.getElementById('userName').textContent = currentUser.name;
+                const roleEl = document.getElementById('userRole');
+                roleEl.textContent = currentUser.role;
+                roleEl.style.display = currentUser.role === 'admin' ? 'inline-block' : 'none';
+                document.getElementById('staffTab').style.display = currentUser.role === 'admin' ? '' : 'none';
+            }
+
+            async function doLogin(username, password) {
+                const res = await fetch(`${API_BASE}/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                const payload = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(payload.error || 'Login failed');
+                authToken = payload.token;
+                currentUser = payload.user;
+                localStorage.setItem(TOKEN_KEY, authToken);
+            }
+
+            async function doLogout() {
+                try { await fetch(`${API_BASE}/auth/logout`, { method: 'POST', headers: authHeaders() }); } catch (e) {}
+                authToken = null;
+                currentUser = null;
+                localStorage.removeItem(TOKEN_KEY);
+                showLogin();
+            }
+
+            // Verify an existing token on load; resolves true if still valid.
+            async function verifyExistingToken() {
+                if (!authToken) return false;
+                try {
+                    const res = await fetch(`${API_BASE}/auth/me`, { headers: authHeaders() });
+                    if (!res.ok) return false;
+                    const payload = await res.json();
+                    currentUser = payload.user;
+                    return true;
+                } catch (e) {
+                    return false;
+                }
+            }
+
+            // ---------- STAFF MANAGEMENT (admins only) ----------
+            async function loadStaffAndAudit() {
+                if (!currentUser || currentUser.role !== 'admin') return;
+                try {
+                    const [staff, audit] = await Promise.all([
+                        apiCall('GET', '/staff'),
+                        apiCall('GET', '/audit')
+                    ]);
+                    renderStaff(staff || []);
+                    renderAudit(audit || []);
+                } catch (err) {
+                    showToast(err.message || 'Could not load staff data', 'error');
+                }
+            }
+
+            function renderStaff(staff) {
+                const container = document.getElementById('staffList');
+                if (!staff.length) {
+                    container.innerHTML = `<div class="empty-state" style="padding:1.5rem;"><p>No staff accounts yet.</p></div>`;
+                    return;
+                }
+                container.innerHTML = staff.map(s => {
+                    const isYou = currentUser && s.username === currentUser.username;
+                    return `
+                    <div class="staff-item ${isYou ? 'is-you' : ''}">
+                        <div>
+                            <div class="s-name">${escapeHtml(s.name)} ${isYou ? '<span style="font-size:0.7rem;color:var(--mot-green);">(you)</span>' : ''}</div>
+                            <div class="s-sub">@${escapeHtml(s.username)} · added ${formatDate((s.createdAt || '').slice(0,10))}</div>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:0.8rem;">
+                            <span class="role-tag ${s.role}">${s.role}</span>
+                            ${isYou ? '' : `<button class="btn-delete" data-action="remove-staff" data-id="${s.id}" data-name="${escapeHtml(s.name)}" style="padding:0.32rem 0.85rem;border-radius:var(--radius-sm);font-size:0.78rem;font-weight:600;font-family:var(--font-display);text-transform:uppercase;">Remove</button>`}
+                        </div>
+                    </div>`;
+                }).join('');
+                container.querySelectorAll('[data-action="remove-staff"]').forEach(btn => {
+                    btn.addEventListener('click', () => removeStaff(btn.dataset.id, btn.dataset.name));
+                });
+            }
+
+            function renderAudit(entries) {
+                const container = document.getElementById('auditList');
+                if (!entries.length) {
+                    container.innerHTML = `<div class="empty-state" style="padding:1.5rem;"><p>No activity recorded yet.</p></div>`;
+                    return;
+                }
+                container.innerHTML = entries.map(a => `
+                    <div class="audit-item">
+                        <div class="a-details">${escapeHtml(a.details || a.action)}</div>
+                        <div class="a-meta">by <strong>${escapeHtml(a.staffName || 'Unknown')}</strong> · ${new Date(a.createdAt).toLocaleString('en-GB')}</div>
+                    </div>
+                `).join('');
+            }
+
+            async function addStaff(payload, btn) {
+                setButtonLoading(btn, true);
+                try {
+                    await apiCall('POST', '/staff', payload);
+                    showToast('Staff member added!', 'success');
+                    document.getElementById('staffForm').reset();
+                    await loadStaffAndAudit();
+                } catch (err) {
+                    showToast(err.message || 'Could not add staff member', 'error');
+                } finally {
+                    setButtonLoading(btn, false);
+                }
+            }
+
+            async function removeStaff(id, name) {
+                const ok = await showConfirm(
+                    `Remove ${name || 'this staff member'}? They will no longer be able to log in.`,
+                    { title: 'Remove Staff', confirmLabel: 'Remove' }
+                );
+                if (!ok) return;
+                try {
+                    await apiCall('DELETE', `/staff/${id}`);
+                    showToast('Staff member removed.', 'info');
+                    await loadStaffAndAudit();
+                } catch (err) {
+                    showToast(err.message || 'Could not remove staff member', 'error');
+                }
+            }
+
+            // Simple HTML escaper for user-entered values rendered into the panel.
+            function escapeHtml(str) {
+                return String(str == null ? '' : str).replace(/[&<>"']/g, (c) => (
+                    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+                ));
             }
 
             // ---------- TOAST ----------
@@ -1776,11 +2063,86 @@
                     dismissAllNotifications();
                 });
 
-                // Load initial state
+                // Login form
+                document.getElementById('loginForm').addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const btn = document.getElementById('loginSubmitBtn');
+                    const errEl = document.getElementById('loginError');
+                    errEl.textContent = '';
+                    setButtonLoading(btn, true);
+                    try {
+                        const username = document.getElementById('loginUsername').value.trim();
+                        const password = document.getElementById('loginPassword').value;
+                        await doLogin(username, password);
+                        document.getElementById('loginPassword').value = '';
+                        applyUserToUI();
+                        showApp();
+                        await startApp();
+                    } catch (err) {
+                        errEl.textContent = err.message || 'Login failed. Please try again.';
+                    } finally {
+                        setButtonLoading(btn, false);
+                    }
+                });
+
+                // Logout
+                document.getElementById('logoutBtn').addEventListener('click', doLogout);
+
+                // Backup — fetch with the auth token, then download the blob
+                // (a plain <a href> can't send the bearer token).
+                document.getElementById('backupBtn').addEventListener('click', async () => {
+                    try {
+                        const res = await fetch(`${API_BASE}/backup`, { headers: authHeaders() });
+                        if (res.status === 401) { handleUnauthorized(); return; }
+                        if (!res.ok) throw new Error('Backup failed');
+                        const blob = await res.blob();
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `mot-manager-backup-${new Date().toISOString().slice(0, 10)}.json`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                    } catch (err) {
+                        showToast(err.message || 'Could not download backup', 'error');
+                    }
+                });
+
+                // Add Staff form
+                document.getElementById('staffForm').addEventListener('submit', (e) => {
+                    e.preventDefault();
+                    const payload = {
+                        name: document.getElementById('staffName').value,
+                        username: document.getElementById('staffUsername').value,
+                        password: document.getElementById('staffPassword').value,
+                        role: document.getElementById('staffRole').value
+                    };
+                    addStaff(payload, document.getElementById('staffSubmitBtn'));
+                });
+
+                // Gate the app behind authentication.
+                const validSession = await verifyExistingToken();
+                if (validSession) {
+                    applyUserToUI();
+                    showApp();
+                    await startApp();
+                } else {
+                    authToken = null;
+                    localStorage.removeItem(TOKEN_KEY);
+                    document.getElementById('loadingOverlay').classList.add('hidden');
+                    showLogin();
+                }
+            }
+
+            // Loads workshop data and starts refresh timers. Called only once a
+            // staff member is authenticated (on login or a valid stored token).
+            let appStarted = false;
+            async function startApp() {
                 await fetchState();
                 checkAllVehiclesAlerts();
-                setInterval(() => { fetchState().then(() => checkAllVehiclesAlerts()); }, 6 * 3600000);
-
+                if (!appStarted) {
+                    appStarted = true;
+                    setInterval(() => { fetchState().then(() => checkAllVehiclesAlerts()); }, 6 * 3600000);
+                }
                 console.log('MOT Manager (Full CRM) ready!');
                 console.log(`${data.customers.length} customers, ${data.vehicles.length} vehicles, ${data.bookings.length} bookings`);
             }

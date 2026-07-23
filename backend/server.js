@@ -1,6 +1,7 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const cors = require('cors');
 const nodemailer = require('nodemailer');
 const app = express();
@@ -35,11 +36,19 @@ if (!process.env.DATA_DIR) {
 // Helper: Read data from disk
 function readData() {
   if (!fs.existsSync(DATA_FILE)) {
-    const defaultData = { customers: [], vehicles: [], bookings: [], notifications: [] };
+    const defaultData = { customers: [], vehicles: [], bookings: [], notifications: [], staff: [], auditLog: [] };
     fs.writeFileSync(DATA_FILE, JSON.stringify(defaultData, null, 2));
     return defaultData;
   }
-  return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+  const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+  // Backfill collections that may be missing from older data files.
+  data.customers = data.customers || [];
+  data.vehicles = data.vehicles || [];
+  data.bookings = data.bookings || [];
+  data.notifications = data.notifications || [];
+  data.staff = data.staff || [];
+  data.auditLog = data.auditLog || [];
+  return data;
 }
 
 // Helper: Write data to disk
@@ -86,58 +95,116 @@ function rateLimit(maxRequests, windowMs) {
 }
 
 // =========================
-//   ADMIN AUTH (Basic Auth + brute-force lockout)
+//   STAFF AUTH (per-user login, hashed passwords, in-memory sessions)
 // =========================
-// Protects the /admin page and every /api route except the public ones
-// registered below. Set ADMIN_PASSWORD (and optionally ADMIN_USER) as
-// environment variables on Render.
+// Each staff member has an account in data.json with a salted + hashed password.
+// A successful login issues a bearer token kept in server memory; the admin SPA
+// stores it and sends it on every /api request. A default admin is seeded on
+// first run from ADMIN_USER / ADMIN_PASSWORD (see seedDefaultAdmin below).
 const loginFailures = new Map(); // ip -> { count, lockedUntil }
-const MAX_LOGIN_ATTEMPTS = 6;
+const MAX_LOGIN_ATTEMPTS = 8;
 const LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
 
-function requireAdminAuth(req, res, next) {
-  const expectedUser = process.env.ADMIN_USER || 'admin';
-  const expectedPass = process.env.ADMIN_PASSWORD;
-  const ip = req.ip || req.connection.remoteAddress || 'unknown';
+const sessions = new Map(); // token -> { staffId, username, name, role, expiresAt }
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
 
-  if (!expectedPass) {
-    console.warn('⚠️  ADMIN_PASSWORD is not set — the admin area is currently UNPROTECTED.');
-    return next();
+// --- Password hashing (Node's built-in crypto scrypt — no external dependency) ---
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(String(password), salt, 64).toString('hex');
+  return `scrypt:${salt}:${derived}`;
+}
+function verifyPassword(password, stored) {
+  if (!stored || typeof stored !== 'string') return false;
+  const parts = stored.split(':');
+  if (parts.length !== 3 || parts[0] !== 'scrypt') return false;
+  const [, salt, derived] = parts;
+  const test = crypto.scryptSync(String(password), salt, 64).toString('hex');
+  const a = Buffer.from(derived, 'hex');
+  const b = Buffer.from(test, 'hex');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+// --- Sessions ---
+function createSession(staff) {
+  const token = crypto.randomBytes(32).toString('hex');
+  sessions.set(token, {
+    staffId: staff.id,
+    username: staff.username,
+    name: staff.name,
+    role: staff.role,
+    expiresAt: Date.now() + SESSION_TTL_MS
+  });
+  return token;
+}
+function getSession(token) {
+  const s = token ? sessions.get(token) : null;
+  if (!s) return null;
+  if (Date.now() > s.expiresAt) { sessions.delete(token); return null; }
+  return s;
+}
+function tokenFromReq(req) {
+  const h = req.headers.authorization || '';
+  return h.startsWith('Bearer ') ? h.slice(7).trim() : null;
+}
+
+// Require a valid staff session for /api routes.
+function requireStaffAuth(req, res, next) {
+  const session = getSession(tokenFromReq(req));
+  if (!session) return res.status(401).json({ error: 'Please log in to continue.' });
+  req.staff = session;
+  next();
+}
+
+// Require the logged-in staff member to be an admin (for staff management).
+function requireMainAdmin(req, res, next) {
+  if (!req.staff || req.staff.role !== 'admin') {
+    return res.status(403).json({ error: 'This action is restricted to admins.' });
   }
+  next();
+}
 
-  const failRecord = loginFailures.get(ip);
-  if (failRecord && failRecord.lockedUntil && Date.now() < failRecord.lockedUntil) {
-    const minsLeft = Math.ceil((failRecord.lockedUntil - Date.now()) / 60000);
-    return res.status(429).send(`Too many failed login attempts. Try again in ${minsLeft} minute${minsLeft === 1 ? '' : 's'}.`);
+// Describe a booking's vehicle for audit messages.
+function bookingReg(data, booking) {
+  const v = booking && booking.vehicleId ? data.vehicles.find(x => x.id === booking.vehicleId) : null;
+  return v ? v.regNumber : 'unknown vehicle';
+}
+
+// Append an entry to the audit log. Mutates the passed-in data object; the
+// caller is responsible for writeData(). req.staff supplies who performed it.
+function logAudit(data, req, action, details) {
+  if (!Array.isArray(data.auditLog)) data.auditLog = [];
+  data.auditLog.unshift({
+    id: generateId(),
+    staffId: req.staff ? req.staff.staffId : null,
+    staffName: req.staff ? req.staff.name : 'Unknown',
+    action,
+    details: details || '',
+    createdAt: new Date().toISOString()
+  });
+  if (data.auditLog.length > 1000) data.auditLog.length = 1000; // cap growth
+}
+
+// Seed a default admin account on first run so the panel is usable immediately.
+function seedDefaultAdmin() {
+  const data = readData();
+  if (data.staff && data.staff.length > 0) return;
+  const username = process.env.ADMIN_USER || 'admin';
+  const password = process.env.ADMIN_PASSWORD || 'admin';
+  data.staff = [{
+    id: generateId(),
+    username,
+    name: 'Main Admin',
+    role: 'admin',
+    passwordHash: hashPassword(password),
+    createdAt: new Date().toISOString()
+  }];
+  writeData(data);
+  if (!process.env.ADMIN_PASSWORD) {
+    console.warn(`⚠️  No ADMIN_PASSWORD set — seeded admin "${username}" with password "admin". Log in and change it (or add a new admin) immediately.`);
+  } else {
+    console.log(`👤 Seeded default admin account "${username}" from ADMIN_USER / ADMIN_PASSWORD.`);
   }
-
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Basic ')) {
-    res.set('WWW-Authenticate', 'Basic realm="MOT Manager Admin"');
-    return res.status(401).send('Authentication required');
-  }
-
-  const decoded = Buffer.from(authHeader.split(' ')[1], 'base64').toString('utf8');
-  const separatorIdx = decoded.indexOf(':');
-  const user = decoded.slice(0, separatorIdx);
-  const pass = decoded.slice(separatorIdx + 1);
-
-  if (user === expectedUser && pass === expectedPass) {
-    loginFailures.delete(ip); // reset on success
-    return next();
-  }
-
-  // Track the failure
-  const current = loginFailures.get(ip) || { count: 0, lockedUntil: null };
-  current.count += 1;
-  if (current.count >= MAX_LOGIN_ATTEMPTS) {
-    current.lockedUntil = Date.now() + LOCKOUT_MS;
-    console.warn(`⚠️  IP ${ip} locked out of admin login for ${LOCKOUT_MS / 60000} minutes after ${current.count} failed attempts.`);
-  }
-  loginFailures.set(ip, current);
-
-  res.set('WWW-Authenticate', 'Basic realm="MOT Manager Admin"');
-  return res.status(401).send('Invalid credentials');
 }
 
 // =========================
@@ -613,17 +680,62 @@ app.post('/api/public/bookings', (req, res) => {
 });
 
 // =========================
+//   AUTH — LOGIN (no session required; rate-limited + brute-force lockout)
+//   Registered before the /api staff-auth guard so it stays reachable.
+// =========================
+const loginLimiter = rateLimit(20, 15 * 60 * 1000); // 20 attempts / 15 min / IP
+app.post('/api/auth/login', loginLimiter, (req, res) => {
+  const ip = req.ip || req.connection.remoteAddress || 'unknown';
+  const failRecord = loginFailures.get(ip);
+  if (failRecord && failRecord.lockedUntil && Date.now() < failRecord.lockedUntil) {
+    const minsLeft = Math.ceil((failRecord.lockedUntil - Date.now()) / 60000);
+    return res.status(429).json({ error: `Too many failed attempts. Try again in ${minsLeft} minute${minsLeft === 1 ? '' : 's'}.` });
+  }
+
+  const username = (req.body.username || '').trim();
+  const password = req.body.password || '';
+  const data = readData();
+  const staff = data.staff.find(s => s.username.toLowerCase() === username.toLowerCase());
+
+  if (!staff || !verifyPassword(password, staff.passwordHash)) {
+    const current = loginFailures.get(ip) || { count: 0, lockedUntil: null };
+    current.count += 1;
+    if (current.count >= MAX_LOGIN_ATTEMPTS) {
+      current.lockedUntil = Date.now() + LOCKOUT_MS;
+      console.warn(`⚠️  IP ${ip} locked out of login for ${LOCKOUT_MS / 60000} min after ${current.count} failed attempts.`);
+    }
+    loginFailures.set(ip, current);
+    return res.status(401).json({ error: 'Invalid username or password.' });
+  }
+
+  loginFailures.delete(ip);
+  const token = createSession(staff);
+  res.json({ token, user: { name: staff.name, username: staff.username, role: staff.role } });
+});
+
+// =========================
 //   STATIC FRONTENDS
 // =========================
-// Admin CRM — protected
-app.use('/admin', requireAdminAuth, express.static(path.join(__dirname, '../frontend/admin')));
+// Admin CRM SPA — served openly; all data access requires a staff token (see
+// requireStaffAuth). The page itself shows a login screen until authenticated.
+app.use('/admin', express.static(path.join(__dirname, '../frontend/admin')));
 // Public MOT-check page — open
 app.use(express.static(path.join(__dirname, '../frontend/public')));
 
 // =========================
-//   ADMIN API (everything below this line requires login)
+//   ADMIN API (everything below this line requires a valid staff login)
 // =========================
-app.use('/api', requireAdminAuth);
+app.use('/api', requireStaffAuth);
+
+// Current logged-in user + logout
+app.get('/api/auth/me', (req, res) => {
+  res.json({ user: { name: req.staff.name, username: req.staff.username, role: req.staff.role } });
+});
+app.post('/api/auth/logout', (req, res) => {
+  const token = tokenFromReq(req);
+  if (token) sessions.delete(token);
+  res.json({ success: true });
+});
 
 app.get('/api/data', (req, res) => {
   res.json(readData());
@@ -756,7 +868,12 @@ app.put('/api/bookings/:id', (req, res) => {
   const data = readData();
   const idx = data.bookings.findIndex(b => b.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'Booking not found' });
-  data.bookings[idx] = { ...data.bookings[idx], ...req.body };
+  const before = data.bookings[idx];
+  data.bookings[idx] = { ...before, ...req.body };
+  // Log meaningful status changes (e.g. confirming a booking).
+  if (req.body.status && req.body.status !== before.status) {
+    logAudit(data, req, `booking_${req.body.status}`, `Set booking for ${bookingReg(data, data.bookings[idx])} to ${req.body.status}`);
+  }
   writeData(data);
   res.json(data.bookings[idx]);
 });
@@ -795,6 +912,7 @@ app.post('/api/bookings/:id/complete', (req, res) => {
     }
   }
 
+  logAudit(data, req, 'booking_complete', `Marked MOT for ${bookingReg(data, booking)} as ${result === 'pass' ? 'passed' : 'failed'}`);
   writeData(data);
   res.json({ booking, vehicle });
 });
@@ -817,6 +935,7 @@ app.put('/api/bookings/:id/reschedule', async (req, res) => {
   booking.date = req.body.date;
   if (req.body.time) booking.time = req.body.time;
   booking.updatedAt = new Date().toISOString();
+  logAudit(data, req, 'booking_reschedule', `Rescheduled booking for ${bookingReg(data, booking)} to ${booking.date} at ${(booking.time || '').slice(0, 5)}`);
   writeData(data);
 
   // Notify the customer of the new time (best-effort).
@@ -846,6 +965,7 @@ app.post('/api/bookings/:id/cancel', async (req, res) => {
   booking.cancelledAt = new Date().toISOString();
   const reason = req.body.reason ? String(req.body.reason).trim() : '';
   if (reason) booking.cancellationReason = reason;
+  logAudit(data, req, 'booking_cancel', `Cancelled booking for ${bookingReg(data, booking)}${reason ? ` (${reason})` : ''}`);
   writeData(data);
 
   // Notify the customer their booking was cancelled (best-effort).
@@ -884,6 +1004,7 @@ app.post('/api/bookings/:id/retest', (req, res) => {
     createdAt: new Date().toISOString()
   };
   data.bookings.push(booking);
+  logAudit(data, req, 'booking_retest', `Booked retest for ${bookingReg(data, original)} on ${booking.date}`);
   writeData(data);
   res.status(201).json(booking);
 });
@@ -918,8 +1039,71 @@ app.put('/api/notifications/:id', (req, res) => {
   res.json(data.notifications[idx]);
 });
 
-// Admin catch-all (SPA) — must stay password-protected too
-app.get('/admin/*', requireAdminAuth, (req, res) => {
+// ----- STAFF MANAGEMENT (admins only) -----
+app.get('/api/staff', requireMainAdmin, (req, res) => {
+  const data = readData();
+  // Never expose password hashes.
+  res.json(data.staff.map(s => ({
+    id: s.id, username: s.username, name: s.name, role: s.role, createdAt: s.createdAt
+  })));
+});
+
+app.post('/api/staff', requireMainAdmin, (req, res) => {
+  const data = readData();
+  const username = (req.body.username || '').trim();
+  const name = (req.body.name || '').trim();
+  const password = req.body.password || '';
+  const role = req.body.role === 'admin' ? 'admin' : 'staff';
+
+  if (!username || !name || !password) {
+    return res.status(400).json({ error: 'Name, username and password are all required.' });
+  }
+  if (password.length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+  }
+  if (data.staff.some(s => s.username.toLowerCase() === username.toLowerCase())) {
+    return res.status(409).json({ error: 'That username is already taken.' });
+  }
+
+  const staff = {
+    id: generateId(),
+    username,
+    name,
+    role,
+    passwordHash: hashPassword(password),
+    createdAt: new Date().toISOString()
+  };
+  data.staff.push(staff);
+  logAudit(data, req, 'staff_add', `Added staff member ${name} (${username}, ${role})`);
+  writeData(data);
+  res.status(201).json({ id: staff.id, username: staff.username, name: staff.name, role: staff.role, createdAt: staff.createdAt });
+});
+
+app.delete('/api/staff/:id', requireMainAdmin, (req, res) => {
+  const data = readData();
+  const target = data.staff.find(s => s.id === req.params.id);
+  if (!target) return res.status(404).json({ error: 'Staff member not found.' });
+  if (target.id === req.staff.staffId) {
+    return res.status(400).json({ error: 'You cannot remove your own account while logged in.' });
+  }
+  const otherAdmins = data.staff.filter(s => s.role === 'admin' && s.id !== target.id);
+  if (target.role === 'admin' && otherAdmins.length === 0) {
+    return res.status(400).json({ error: 'Cannot remove the last remaining admin account.' });
+  }
+  data.staff = data.staff.filter(s => s.id !== target.id);
+  logAudit(data, req, 'staff_remove', `Removed staff member ${target.name} (${target.username})`);
+  writeData(data);
+  res.status(204).send();
+});
+
+// ----- AUDIT LOG (admins only) -----
+app.get('/api/audit', requireMainAdmin, (req, res) => {
+  const data = readData();
+  res.json(data.auditLog.slice(0, 100));
+});
+
+// Admin catch-all (SPA) — served openly; the page gates itself behind login.
+app.get('/admin/*', (req, res) => {
   res.sendFile(path.join(__dirname, '../frontend/admin/index.html'));
 });
 
@@ -931,6 +1115,7 @@ app.get('*', (req, res) => {
 // Start server
 app.listen(PORT, () => {
   console.log(`✅ MOT Manager API running on port ${PORT}`);
+  seedDefaultAdmin();
   checkAndSendReminders();
   setInterval(checkAndSendReminders, 12 * 60 * 60 * 1000);
   setInterval(sendBackupEmail, 7 * 24 * 60 * 60 * 1000);
