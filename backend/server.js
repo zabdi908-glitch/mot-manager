@@ -341,6 +341,18 @@ async function sendRescheduleEmail(customer, vehicle, booking) {
   }
 }
 
+// Turns a stored cancellation reason into a warm, customer-facing sentence.
+// Preset reasons get a friendly phrasing; free-text ("Other") is quoted as given.
+function friendlyCancellationReason(reason) {
+  if (!reason) return 'Unfortunately, we are unable to keep your appointment at the booked time.';
+  const map = {
+    'Customer requested': 'As requested, we have cancelled this appointment for you.',
+    'Vehicle not ready': 'Unfortunately, your vehicle was not ready in time for its scheduled test.',
+    'Garage maintenance': 'This is due to some unexpected maintenance at our garage, which means we are unable to carry out tests at the booked time.'
+  };
+  return map[reason] || `This is due to the following: ${reason}.`;
+}
+
 function buildCancellationEmail(customer, vehicle, booking) {
   const dateUK = new Date(booking.date + 'T00:00:00').toLocaleDateString('en-GB', {
     weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
@@ -348,25 +360,40 @@ function buildCancellationEmail(customer, vehicle, booking) {
   const timeStr = (booking.time || '09:00').slice(0, 5);
   const firstName = (customer.name || '').split(' ')[0] || customer.name;
   const reason = booking.cancellationReason ? String(booking.cancellationReason).trim() : '';
+  const reasonSentence = friendlyCancellationReason(reason);
   const rebookLink = `${APP_URL}/?reg=${encodeURIComponent(vehicle.regNumber)}`;
-  const phoneLine = BUSINESS_PHONE ? `\nTo rebook, visit ${rebookLink} or call us on ${BUSINESS_PHONE}.` : `\nTo rebook, visit ${rebookLink}.`;
 
-  const subject = `Your MOT booking has been cancelled – ${vehicle.regNumber}`;
+  const subject = `We're sorry – your MOT booking has been cancelled (${vehicle.regNumber})`;
 
-  const reasonTextLine = reason ? `Reason: ${reason}\n` : '';
+  // Contact options for the "next steps" section, tailored to what's configured.
+  const contactTextLines = [`  • Online: ${rebookLink}`];
+  if (BUSINESS_PHONE) contactTextLines.push(`  • By phone: ${BUSINESS_PHONE}`);
+  contactTextLines.push('  • By email: simply reply to this message');
+
   const text =
-`Hi ${firstName},
+`Dear ${firstName},
 
-Your MOT booking has been cancelled. Here are the details of the cancelled booking:
+We're very sorry, but we've had to cancel your upcoming MOT booking with ${BUSINESS_NAME}. ${reasonSentence} We sincerely apologise for any inconvenience this may cause.
+
+For your reference, here are the details of the cancelled booking:
 
 Vehicle: ${vehicle.make} ${vehicle.model}
 Registration: ${vehicle.regNumber}
 Date: ${dateUK}
 Time: ${timeStr}
-${reasonTextLine}${phoneLine}
 
-Thanks,
+We'd be glad to get you booked back in at a time that suits you. Please arrange a new appointment at your earliest convenience:
+
+${contactTextLines.join('\n')}
+
+Thank you for your understanding — we look forward to seeing you soon.
+
+Kind regards,
 ${BUSINESS_NAME}`;
+
+  const contactHtml = BUSINESS_PHONE
+    ? `call us on <strong style="color:#1c2321;">${BUSINESS_PHONE}</strong>, or simply reply to this email`
+    : `simply reply to this email`;
 
   const html = `
   <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 480px; margin: 0 auto; background: #f5f1e6;">
@@ -374,12 +401,18 @@ ${BUSINESS_NAME}`;
       <div style="color: #ffd400; font-weight: bold; font-size: 18px; letter-spacing: 0.5px;">${BUSINESS_NAME}</div>
     </div>
     <div style="padding: 28px 24px;">
-      <p style="font-size: 16px; color: #1c2321; margin: 0 0 16px;">Hi ${firstName},</p>
+      <p style="font-size: 16px; color: #1c2321; margin: 0 0 16px;">Dear ${firstName},</p>
       <div style="display: inline-block; background: #b8262c1a; color: #b8262c; border: 2px solid #b8262c; border-radius: 4px; padding: 4px 12px; font-size: 12px; font-weight: bold; letter-spacing: 1px; margin-bottom: 16px;">
         BOOKING CANCELLED
       </div>
-      <p style="font-size: 15px; color: #333d3a; line-height: 1.5; margin: 0 0 20px;">Your MOT booking has been cancelled. Here are the details of the cancelled booking:</p>
+      <p style="font-size: 15px; color: #333d3a; line-height: 1.6; margin: 0 0 14px;">
+        We're very sorry, but we've had to cancel your upcoming MOT booking with ${BUSINESS_NAME}. ${reasonSentence}
+      </p>
+      <p style="font-size: 15px; color: #333d3a; line-height: 1.6; margin: 0 0 20px;">
+        We sincerely apologise for any inconvenience this may cause.
+      </p>
 
+      <p style="font-size: 13px; color: #55605c; margin: 0 0 8px; font-weight: 600;">For your reference, here are the details of the cancelled booking:</p>
       <table style="width: 100%; background: #fffdf8; border: 1px solid #d9d0ba; border-radius: 4px; border-collapse: collapse; margin-bottom: 24px;">
         <tr>
           <td style="padding: 12px 16px; color: #55605c; font-size: 13px;">Vehicle</td>
@@ -399,20 +432,26 @@ ${BUSINESS_NAME}`;
           <td style="padding: 0 16px 12px; color: #55605c; font-size: 13px;">Time</td>
           <td style="padding: 0 16px 12px; color: #1c2321; font-size: 13px; font-weight: bold; text-align: right;">${timeStr}</td>
         </tr>
-        ${reason ? `<tr>
-          <td style="padding: 0 16px 12px; color: #55605c; font-size: 13px;">Reason</td>
-          <td style="padding: 0 16px 12px; color: #1c2321; font-size: 13px; font-weight: bold; text-align: right;">${reason}</td>
-        </tr>` : ''}
       </table>
 
-      <div style="text-align: center; margin-bottom: 20px;">
+      <p style="font-size: 15px; color: #333d3a; line-height: 1.6; margin: 0 0 18px;">
+        We'd be glad to get you booked back in at a time that suits you. Please arrange a new appointment at your earliest convenience:
+      </p>
+
+      <div style="text-align: center; margin-bottom: 18px;">
         <a href="${rebookLink}" style="display: inline-block; background: #1c2321; color: #ffd400; text-decoration: none; font-weight: bold; padding: 14px 32px; border-radius: 4px; font-size: 15px; letter-spacing: 0.5px;">
-          REBOOK YOUR TEST
+          BOOK A NEW APPOINTMENT
         </a>
       </div>
 
-      <p style="font-size: 13px; color: #8b8f83; text-align: center; margin: 0;">
-        ${BUSINESS_PHONE ? `Or call us on ${BUSINESS_PHONE} to arrange a new time` : 'Or reply to this email to arrange a new time'}
+      <p style="font-size: 13px; color: #55605c; text-align: center; line-height: 1.6; margin: 0 0 20px;">
+        Prefer to speak to us? You can ${contactHtml}.
+      </p>
+
+      <p style="font-size: 14px; color: #333d3a; line-height: 1.6; margin: 0;">
+        Thank you for your understanding — we look forward to seeing you soon.<br/>
+        <span style="color:#8b8f83;">Kind regards,</span><br/>
+        <strong style="color:#1c2321;">${BUSINESS_NAME}</strong>
       </p>
     </div>
     <div style="padding: 16px 24px; text-align: center; border-top: 1px solid #d9d0ba;">
