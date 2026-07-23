@@ -347,11 +347,13 @@ function buildCancellationEmail(customer, vehicle, booking) {
   });
   const timeStr = (booking.time || '09:00').slice(0, 5);
   const firstName = (customer.name || '').split(' ')[0] || customer.name;
+  const reason = booking.cancellationReason ? String(booking.cancellationReason).trim() : '';
   const rebookLink = `${APP_URL}/?reg=${encodeURIComponent(vehicle.regNumber)}`;
   const phoneLine = BUSINESS_PHONE ? `\nTo rebook, visit ${rebookLink} or call us on ${BUSINESS_PHONE}.` : `\nTo rebook, visit ${rebookLink}.`;
 
   const subject = `Your MOT booking has been cancelled – ${vehicle.regNumber}`;
 
+  const reasonTextLine = reason ? `Reason: ${reason}\n` : '';
   const text =
 `Hi ${firstName},
 
@@ -361,7 +363,7 @@ Vehicle: ${vehicle.make} ${vehicle.model}
 Registration: ${vehicle.regNumber}
 Date: ${dateUK}
 Time: ${timeStr}
-${phoneLine}
+${reasonTextLine}${phoneLine}
 
 Thanks,
 ${BUSINESS_NAME}`;
@@ -397,6 +399,10 @@ ${BUSINESS_NAME}`;
           <td style="padding: 0 16px 12px; color: #55605c; font-size: 13px;">Time</td>
           <td style="padding: 0 16px 12px; color: #1c2321; font-size: 13px; font-weight: bold; text-align: right;">${timeStr}</td>
         </tr>
+        ${reason ? `<tr>
+          <td style="padding: 0 16px 12px; color: #55605c; font-size: 13px;">Reason</td>
+          <td style="padding: 0 16px 12px; color: #1c2321; font-size: 13px; font-weight: bold; text-align: right;">${reason}</td>
+        </tr>` : ''}
       </table>
 
       <div style="text-align: center; margin-bottom: 20px;">
@@ -791,6 +797,8 @@ app.post('/api/bookings/:id/cancel', async (req, res) => {
 
   booking.status = 'cancelled';
   booking.cancelledAt = new Date().toISOString();
+  const reason = req.body.reason ? String(req.body.reason).trim() : '';
+  if (reason) booking.cancellationReason = reason;
   writeData(data);
 
   // Notify the customer their booking was cancelled (best-effort).

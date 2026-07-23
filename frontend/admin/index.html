@@ -413,6 +413,31 @@
         </div>
     </div>
 
+    <!-- CANCEL BOOKING MODAL (with reason) -->
+    <div class="modal-overlay" id="cancelModal">
+        <div class="modal-box">
+            <h4>Cancel Booking</h4>
+            <p id="cancelModalVehicle">The customer will be emailed to let them know.</p>
+            <div class="form-group">
+                <label for="cancelReason">Reason for cancellation</label>
+                <select id="cancelReason">
+                    <option value="Customer requested">Customer requested</option>
+                    <option value="Vehicle not ready">Vehicle not ready</option>
+                    <option value="Garage maintenance">Garage maintenance</option>
+                    <option value="Other">Other</option>
+                </select>
+            </div>
+            <div class="form-group" id="cancelReasonOtherGroup" style="display:none;margin-bottom:1.5rem;">
+                <label for="cancelReasonOther">Please specify</label>
+                <input type="text" id="cancelReasonOther" placeholder="Enter a reason..." maxlength="200" />
+            </div>
+            <div class="modal-actions">
+                <button class="modal-btn-cancel" id="cancelModalBack">Back</button>
+                <button class="modal-btn-confirm" id="cancelModalConfirm">Cancel Booking</button>
+            </div>
+        </div>
+    </div>
+
     <div class="app-wrapper" id="app">
         <!-- HEADER -->
         <header class="app-header">
@@ -822,6 +847,66 @@
                 });
             }
 
+            // ---------- CANCEL MODAL (capture a cancellation reason) ----------
+            // Resolves to { reason } or null if dismissed.
+            function showCancelModal({ vehicleLabel = '' } = {}) {
+                return new Promise((resolve) => {
+                    const overlay = document.getElementById('cancelModal');
+                    const vehicleEl = document.getElementById('cancelModalVehicle');
+                    const reasonSelect = document.getElementById('cancelReason');
+                    const otherGroup = document.getElementById('cancelReasonOtherGroup');
+                    const otherInput = document.getElementById('cancelReasonOther');
+                    const backBtn = document.getElementById('cancelModalBack');
+                    const confirmBtn = document.getElementById('cancelModalConfirm');
+
+                    vehicleEl.textContent = vehicleLabel
+                        ? `Cancelling the booking for ${vehicleLabel}. The customer will be emailed to let them know.`
+                        : 'The customer will be emailed to let them know.';
+                    reasonSelect.value = 'Customer requested';
+                    otherInput.value = '';
+                    otherGroup.style.display = 'none';
+
+                    function syncOther() {
+                        otherGroup.style.display = reasonSelect.value === 'Other' ? 'block' : 'none';
+                        if (reasonSelect.value === 'Other') otherInput.focus();
+                    }
+
+                    overlay.classList.add('open');
+
+                    function cleanup(value) {
+                        overlay.classList.remove('open');
+                        reasonSelect.removeEventListener('change', syncOther);
+                        backBtn.removeEventListener('click', onBack);
+                        confirmBtn.removeEventListener('click', onConfirm);
+                        overlay.removeEventListener('click', onOverlayClick);
+                        document.removeEventListener('keydown', onKeydown);
+                        resolve(value);
+                    }
+                    function onBack() { cleanup(null); }
+                    function onConfirm() {
+                        let reason = reasonSelect.value;
+                        if (reason === 'Other') {
+                            reason = otherInput.value.trim();
+                            if (!reason) {
+                                showToast('Please enter a reason.', 'warning');
+                                otherInput.focus();
+                                return;
+                            }
+                        }
+                        cleanup({ reason });
+                    }
+                    function onOverlayClick(e) { if (e.target === overlay) cleanup(null); }
+                    function onKeydown(e) { if (e.key === 'Escape') cleanup(null); }
+
+                    reasonSelect.addEventListener('change', syncOther);
+                    backBtn.addEventListener('click', onBack);
+                    confirmBtn.addEventListener('click', onConfirm);
+                    overlay.addEventListener('click', onOverlayClick);
+                    document.addEventListener('keydown', onKeydown);
+                    confirmBtn.focus();
+                });
+            }
+
             // ---------- API CALLS ----------
             async function fetchState() {
                 try {
@@ -921,8 +1006,8 @@
                     : 'Booking updated. (No confirmation email — customer has no email on file.)',
                     'success');
             }
-            async function cancelBooking(id) {
-                const res = await apiCall('POST', `/bookings/${id}/cancel`);
+            async function cancelBooking(id, reason) {
+                const res = await apiCall('POST', `/bookings/${id}/cancel`, { reason });
                 await fetchState();
                 showToast(res && res.emailSent
                     ? 'Booking cancelled — notification email sent to the customer.'
@@ -1208,6 +1293,7 @@
                             <div class="b-reg">${reg}</div>
                             <div class="b-date">${formatDate(b.date)} at ${b.time.slice(0,5)}</div>
                             ${b.notes ? `<div style="font-size:0.75rem;color:var(--text-muted);">${b.notes}</div>` : ''}
+                            ${b.status === 'cancelled' && b.cancellationReason ? `<div style="font-size:0.75rem;color:var(--hazard-red);">Reason: ${b.cancellationReason}</div>` : ''}
                         </div>
                         <div style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;">
                             <span class="b-status ${statusClass}">${statusText}</span>
@@ -1267,13 +1353,12 @@
                 });
                 container.querySelectorAll('[data-action="cancel"]').forEach(btn => {
                     btn.addEventListener('click', async () => {
-                        const ok = await showConfirm(
-                            'Cancel this booking? The customer will be emailed to let them know.',
-                            { title: 'Cancel Booking', confirmLabel: 'Cancel Booking' }
-                        );
-                        if (!ok) return;
+                        const booking = data.bookings.find(b => b.id === btn.dataset.id);
+                        const vehicle = booking ? getVehicle(booking.vehicleId) : null;
+                        const outcome = await showCancelModal({ vehicleLabel: vehicle ? vehicle.regNumber : '' });
+                        if (!outcome) return;
                         try {
-                            await cancelBooking(btn.dataset.id);
+                            await cancelBooking(btn.dataset.id, outcome.reason);
                         } catch (err) {
                             showToast(err.message || 'Something went wrong', 'error');
                         }
