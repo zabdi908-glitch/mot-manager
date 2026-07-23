@@ -523,6 +523,41 @@ app.put('/api/bookings/:id', (req, res) => {
   res.json(data.bookings[idx]);
 });
 
+// Complete a booking with an MOT result (pass or fail), atomically.
+// On a PASS, the vehicle's MOT expiry is rolled forward to the new date and its
+// reminder stage is reset so future reminders fire again. On a FAIL, the result
+// is recorded but the expiry is left untouched (the vehicle still needs a valid MOT).
+app.post('/api/bookings/:id/complete', (req, res) => {
+  const data = readData();
+  const booking = data.bookings.find(b => b.id === req.params.id);
+  if (!booking) return res.status(404).json({ error: 'Booking not found' });
+
+  const result = req.body.result === 'fail' ? 'fail' : 'pass';
+  const newExpiry = req.body.motExpiry;
+
+  if (result === 'pass') {
+    if (!newExpiry || !/^\d{4}-\d{2}-\d{2}$/.test(newExpiry)) {
+      return res.status(400).json({ error: 'A valid new MOT expiry date (YYYY-MM-DD) is required for a pass' });
+    }
+  }
+
+  booking.status = 'completed';
+  booking.result = result;
+  booking.completedAt = new Date().toISOString();
+
+  let vehicle = null;
+  if (result === 'pass' && booking.vehicleId) {
+    vehicle = data.vehicles.find(v => v.id === booking.vehicleId);
+    if (vehicle) {
+      vehicle.motExpiry = newExpiry;
+      vehicle.emailStage = null; // new expiry — allow reminders to fire again
+    }
+  }
+
+  writeData(data);
+  res.json({ booking, vehicle });
+});
+
 app.delete('/api/bookings/:id', (req, res) => {
   const data = readData();
   data.bookings = data.bookings.filter(b => b.id !== req.params.id);

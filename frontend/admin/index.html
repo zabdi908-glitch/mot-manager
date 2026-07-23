@@ -214,6 +214,32 @@
         .modal-btn-confirm:hover { opacity: 0.88; }
         .modal-btn-confirm.primary-action { background: var(--ink); color: var(--plate-yellow); }
 
+        /* ---------- MOT RESULT MODAL (pass/fail) ---------- */
+        .modal-box.result-modal { border-top: 3px dashed var(--steel-blue); }
+        .modal-box .modal-label { display: block; font-weight: 600; font-size: 0.78rem; margin-bottom: 0.4rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em; }
+        .result-toggle { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; margin-bottom: 1.3rem; }
+        .result-btn {
+            padding: 0.85rem 0.5rem; border: 2px solid var(--border); border-radius: var(--radius-sm);
+            background: var(--surface); color: var(--text-secondary); font-family: var(--font-display);
+            text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; font-size: 0.9rem;
+            transition: all var(--transition); display: flex; align-items: center; justify-content: center; gap: 0.4rem;
+        }
+        .result-btn .result-icon { font-size: 1.05rem; }
+        .result-btn.pass.active { border-color: var(--mot-green); background: var(--mot-green-bg); color: var(--mot-green); box-shadow: inset 0 0 0 1px var(--mot-green); }
+        .result-btn.fail.active { border-color: var(--hazard-red); background: var(--hazard-red-bg); color: var(--hazard-red); box-shadow: inset 0 0 0 1px var(--hazard-red); }
+        .result-btn:not(.active):hover { border-color: var(--ink); color: var(--ink); }
+        .result-expiry-group { margin-bottom: 1.5rem; }
+        .result-expiry-group.hidden { display: none; }
+        .result-fail-note {
+            background: var(--hazard-red-bg); color: var(--hazard-red); border-radius: var(--radius-sm);
+            padding: 0.75rem 1rem; font-size: 0.85rem; line-height: 1.45; margin-bottom: 1.5rem;
+        }
+        .result-fail-note.hidden { display: none; }
+
+        /* result stamps in the booking list */
+        .b-status.result-pass { background: var(--mot-green-bg); color: var(--mot-green); }
+        .b-status.result-fail { background: var(--hazard-red-bg); color: var(--hazard-red); }
+
         /* ---------- BOOKING SECTION ---------- */
         .booking-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; }
         @media (max-width: 800px) { .booking-grid { grid-template-columns: 1fr; } }
@@ -282,6 +308,33 @@
             <div class="modal-actions">
                 <button class="modal-btn-cancel" id="confirmModalCancel">Cancel</button>
                 <button class="modal-btn-confirm" id="confirmModalConfirm">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MOT RESULT MODAL (pass / fail) -->
+    <div class="modal-overlay" id="completeModal">
+        <div class="modal-box result-modal">
+            <h4>Record MOT Result</h4>
+            <p id="completeModalVehicle">Enter the outcome of this MOT test.</p>
+
+            <span class="modal-label">Result</span>
+            <div class="result-toggle" id="resultToggle">
+                <button type="button" class="result-btn pass active" data-result="pass"><span class="result-icon">✓</span> Pass</button>
+                <button type="button" class="result-btn fail" data-result="fail"><span class="result-icon">✕</span> Fail</button>
+            </div>
+
+            <div class="form-group result-expiry-group" id="completeExpiryGroup">
+                <label for="completeExpiry">New MOT Expiry Date</label>
+                <input type="date" id="completeExpiry" />
+            </div>
+            <div class="result-fail-note hidden" id="completeFailNote">
+                The MOT expiry date won't change on a fail — the vehicle still needs a valid MOT before it can be driven.
+            </div>
+
+            <div class="modal-actions">
+                <button class="modal-btn-cancel" id="completeModalCancel">Cancel</button>
+                <button class="modal-btn-confirm primary-action" id="completeModalConfirm">Save Result</button>
             </div>
         </div>
     </div>
@@ -578,6 +631,76 @@
                 });
             }
 
+            // ---------- MOT RESULT MODAL (replaces prompt() in the complete flow) ----------
+            // Resolves to { result: 'pass'|'fail', motExpiry: string|null } or null if cancelled.
+            function showCompleteModal({ vehicleLabel = '', defaultExpiry = '' } = {}) {
+                return new Promise((resolve) => {
+                    const overlay = document.getElementById('completeModal');
+                    const vehicleEl = document.getElementById('completeModalVehicle');
+                    const toggle = document.getElementById('resultToggle');
+                    const passBtn = toggle.querySelector('.result-btn.pass');
+                    const failBtn = toggle.querySelector('.result-btn.fail');
+                    const expiryGroup = document.getElementById('completeExpiryGroup');
+                    const expiryInput = document.getElementById('completeExpiry');
+                    const failNote = document.getElementById('completeFailNote');
+                    const cancelBtn = document.getElementById('completeModalCancel');
+                    const confirmBtn = document.getElementById('completeModalConfirm');
+
+                    let selected = 'pass';
+
+                    vehicleEl.textContent = vehicleLabel
+                        ? `Enter the outcome of the MOT test for ${vehicleLabel}.`
+                        : 'Enter the outcome of this MOT test.';
+                    expiryInput.value = defaultExpiry;
+
+                    function applySelection(result) {
+                        selected = result;
+                        passBtn.classList.toggle('active', result === 'pass');
+                        failBtn.classList.toggle('active', result === 'fail');
+                        expiryGroup.classList.toggle('hidden', result !== 'pass');
+                        failNote.classList.toggle('hidden', result !== 'fail');
+                    }
+                    applySelection('pass');
+                    overlay.classList.add('open');
+
+                    function cleanup(value) {
+                        overlay.classList.remove('open');
+                        passBtn.removeEventListener('click', onPass);
+                        failBtn.removeEventListener('click', onFail);
+                        cancelBtn.removeEventListener('click', onCancel);
+                        confirmBtn.removeEventListener('click', onConfirm);
+                        overlay.removeEventListener('click', onOverlayClick);
+                        document.removeEventListener('keydown', onKeydown);
+                        resolve(value);
+                    }
+                    function onPass() { applySelection('pass'); }
+                    function onFail() { applySelection('fail'); }
+                    function onCancel() { cleanup(null); }
+                    function onConfirm() {
+                        if (selected === 'pass') {
+                            if (!expiryInput.value) {
+                                showToast('Please choose a new MOT expiry date for a pass.', 'warning');
+                                expiryInput.focus();
+                                return;
+                            }
+                            cleanup({ result: 'pass', motExpiry: expiryInput.value });
+                        } else {
+                            cleanup({ result: 'fail', motExpiry: null });
+                        }
+                    }
+                    function onOverlayClick(e) { if (e.target === overlay) cleanup(null); }
+                    function onKeydown(e) { if (e.key === 'Escape') cleanup(null); }
+
+                    passBtn.addEventListener('click', onPass);
+                    failBtn.addEventListener('click', onFail);
+                    cancelBtn.addEventListener('click', onCancel);
+                    confirmBtn.addEventListener('click', onConfirm);
+                    overlay.addEventListener('click', onOverlayClick);
+                    document.addEventListener('keydown', onKeydown);
+                    confirmBtn.focus();
+                });
+            }
+
             // ---------- API CALLS ----------
             async function fetchState() {
                 try {
@@ -662,6 +785,12 @@
             async function deleteBooking(id) {
                 await apiCall('DELETE', `/bookings/${id}`);
                 await fetchState();
+            }
+            async function completeBooking(id, result, motExpiry) {
+                await apiCall('POST', `/bookings/${id}/complete`, { result, motExpiry });
+                await fetchState();
+                showToast(result === 'pass' ? 'MOT passed — expiry updated.' : 'MOT recorded as failed.',
+                    result === 'pass' ? 'success' : 'warning');
             }
 
             // ----- NOTIFICATIONS -----
@@ -866,6 +995,13 @@
                     const vehicle = getVehicle(b.vehicleId);
                     const reg = vehicle ? vehicle.regNumber : 'Unknown vehicle';
                     const statusMap = { pending: 'Pending', confirmed: 'Confirmed', completed: 'Completed', cancelled: 'Cancelled' };
+                    // Completed bookings show the recorded MOT result (pass/fail) instead of a plain "Completed".
+                    let statusClass = b.status;
+                    let statusText = statusMap[b.status] || b.status;
+                    if (b.status === 'completed' && b.result) {
+                        statusClass = b.result === 'fail' ? 'result-fail' : 'result-pass';
+                        statusText = b.result === 'fail' ? 'Failed' : 'Passed';
+                    }
                     return `
                     <div class="booking-item">
                         <div>
@@ -874,7 +1010,7 @@
                             ${b.notes ? `<div style="font-size:0.75rem;color:var(--text-muted);">${b.notes}</div>` : ''}
                         </div>
                         <div style="display:flex;align-items:center;gap:0.6rem;flex-wrap:wrap;">
-                            <span class="b-status ${b.status}">${statusMap[b.status] || b.status}</span>
+                            <span class="b-status ${statusClass}">${statusText}</span>
                             ${b.status === 'pending' ? `<button class="btn-edit" style="padding:0.18rem 0.6rem;font-size:0.68rem;" data-action="confirm" data-id="${b.id}">Confirm</button>` : ''}
                             ${b.status === 'confirmed' ? `<button class="btn-edit" style="padding:0.18rem 0.6rem;font-size:0.68rem;" data-action="complete" data-id="${b.id}">Mark Complete</button>` : ''}
                             ${b.status === 'pending' || b.status === 'confirmed' ? `<button class="btn-delete" style="padding:0.18rem 0.6rem;font-size:0.68rem;" data-action="cancel" data-id="${b.id}">Cancel</button>` : ''}
@@ -890,18 +1026,19 @@
                         const booking = data.bookings.find(b => b.id === btn.dataset.id);
                         if (!booking) return;
 
+                        const vehicle = getVehicle(booking.vehicleId);
                         const defaultNewExpiry = new Date();
                         defaultNewExpiry.setFullYear(defaultNewExpiry.getFullYear() + 1);
                         const defaultStr = defaultNewExpiry.toISOString().split('T')[0];
 
-                        const newExpiry = prompt('MOT passed! Enter the new MOT expiry date (YYYY-MM-DD):', defaultStr);
-                        if (newExpiry === null) return; // cancelled
+                        const outcome = await showCompleteModal({
+                            vehicleLabel: vehicle ? vehicle.regNumber : '',
+                            defaultExpiry: defaultStr
+                        });
+                        if (!outcome) return; // cancelled
 
                         try {
-                            await updateBookingStatus(booking.id, 'completed');
-                            if (newExpiry && booking.vehicleId) {
-                                await updateVehicle(booking.vehicleId, { motExpiry: newExpiry });
-                            }
+                            await completeBooking(booking.id, outcome.result, outcome.motExpiry);
                         } catch (err) {
                             showToast(err.message || 'Something went wrong', 'error');
                         }
