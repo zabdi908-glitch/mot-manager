@@ -921,6 +921,14 @@
                     : 'Booking updated. (No confirmation email — customer has no email on file.)',
                     'success');
             }
+            async function cancelBooking(id) {
+                const res = await apiCall('POST', `/bookings/${id}/cancel`);
+                await fetchState();
+                showToast(res && res.emailSent
+                    ? 'Booking cancelled — notification email sent to the customer.'
+                    : 'Booking cancelled. (No email — customer has no email on file.)',
+                    'info');
+            }
 
             // ----- NOTIFICATIONS -----
             async function createNotification(message, type = 'info') {
@@ -1259,10 +1267,13 @@
                 });
                 container.querySelectorAll('[data-action="cancel"]').forEach(btn => {
                     btn.addEventListener('click', async () => {
-                        const ok = await showConfirm('Cancel this booking?', { title: 'Cancel Booking', confirmLabel: 'Cancel Booking' });
+                        const ok = await showConfirm(
+                            'Cancel this booking? The customer will be emailed to let them know.',
+                            { title: 'Cancel Booking', confirmLabel: 'Cancel Booking' }
+                        );
                         if (!ok) return;
                         try {
-                            await updateBookingStatus(btn.dataset.id, 'cancelled');
+                            await cancelBooking(btn.dataset.id);
                         } catch (err) {
                             showToast(err.message || 'Something went wrong', 'error');
                         }

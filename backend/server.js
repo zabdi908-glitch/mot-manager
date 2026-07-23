@@ -341,6 +341,102 @@ async function sendRescheduleEmail(customer, vehicle, booking) {
   }
 }
 
+function buildCancellationEmail(customer, vehicle, booking) {
+  const dateUK = new Date(booking.date + 'T00:00:00').toLocaleDateString('en-GB', {
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+  });
+  const timeStr = (booking.time || '09:00').slice(0, 5);
+  const firstName = (customer.name || '').split(' ')[0] || customer.name;
+  const rebookLink = `${APP_URL}/?reg=${encodeURIComponent(vehicle.regNumber)}`;
+  const phoneLine = BUSINESS_PHONE ? `\nTo rebook, visit ${rebookLink} or call us on ${BUSINESS_PHONE}.` : `\nTo rebook, visit ${rebookLink}.`;
+
+  const subject = `Your MOT booking has been cancelled – ${vehicle.regNumber}`;
+
+  const text =
+`Hi ${firstName},
+
+Your MOT booking has been cancelled. Here are the details of the cancelled booking:
+
+Vehicle: ${vehicle.make} ${vehicle.model}
+Registration: ${vehicle.regNumber}
+Date: ${dateUK}
+Time: ${timeStr}
+${phoneLine}
+
+Thanks,
+${BUSINESS_NAME}`;
+
+  const html = `
+  <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 480px; margin: 0 auto; background: #f5f1e6;">
+    <div style="background: #1c2321; padding: 20px 24px; text-align: center;">
+      <div style="color: #ffd400; font-weight: bold; font-size: 18px; letter-spacing: 0.5px;">${BUSINESS_NAME}</div>
+    </div>
+    <div style="padding: 28px 24px;">
+      <p style="font-size: 16px; color: #1c2321; margin: 0 0 16px;">Hi ${firstName},</p>
+      <div style="display: inline-block; background: #b8262c1a; color: #b8262c; border: 2px solid #b8262c; border-radius: 4px; padding: 4px 12px; font-size: 12px; font-weight: bold; letter-spacing: 1px; margin-bottom: 16px;">
+        BOOKING CANCELLED
+      </div>
+      <p style="font-size: 15px; color: #333d3a; line-height: 1.5; margin: 0 0 20px;">Your MOT booking has been cancelled. Here are the details of the cancelled booking:</p>
+
+      <table style="width: 100%; background: #fffdf8; border: 1px solid #d9d0ba; border-radius: 4px; border-collapse: collapse; margin-bottom: 24px;">
+        <tr>
+          <td style="padding: 12px 16px; color: #55605c; font-size: 13px;">Vehicle</td>
+          <td style="padding: 12px 16px; color: #1c2321; font-size: 13px; font-weight: bold; text-align: right;">${vehicle.make} ${vehicle.model}</td>
+        </tr>
+        <tr>
+          <td style="padding: 0 16px 12px; color: #55605c; font-size: 13px;">Registration</td>
+          <td style="padding: 0 16px 12px; text-align: right;">
+            <span style="display: inline-block; background: #ffd400; color: #1c2321; border: 2px solid #1c2321; border-radius: 3px; padding: 2px 8px; font-weight: bold; letter-spacing: 1px; font-size: 13px;">${vehicle.regNumber}</span>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 0 16px 12px; color: #55605c; font-size: 13px;">Date</td>
+          <td style="padding: 0 16px 12px; color: #1c2321; font-size: 13px; font-weight: bold; text-align: right;">${dateUK}</td>
+        </tr>
+        <tr>
+          <td style="padding: 0 16px 12px; color: #55605c; font-size: 13px;">Time</td>
+          <td style="padding: 0 16px 12px; color: #1c2321; font-size: 13px; font-weight: bold; text-align: right;">${timeStr}</td>
+        </tr>
+      </table>
+
+      <div style="text-align: center; margin-bottom: 20px;">
+        <a href="${rebookLink}" style="display: inline-block; background: #1c2321; color: #ffd400; text-decoration: none; font-weight: bold; padding: 14px 32px; border-radius: 4px; font-size: 15px; letter-spacing: 0.5px;">
+          REBOOK YOUR TEST
+        </a>
+      </div>
+
+      <p style="font-size: 13px; color: #8b8f83; text-align: center; margin: 0;">
+        ${BUSINESS_PHONE ? `Or call us on ${BUSINESS_PHONE} to arrange a new time` : 'Or reply to this email to arrange a new time'}
+      </p>
+    </div>
+    <div style="padding: 16px 24px; text-align: center; border-top: 1px solid #d9d0ba;">
+      <p style="font-size: 12px; color: #8b8f83; margin: 0;">${BUSINESS_NAME}</p>
+    </div>
+  </div>`;
+
+  return { subject, text, html };
+}
+
+async function sendCancellationEmail(customer, vehicle, booking) {
+  if (!transporter) return false;
+  if (!customer || !customer.email) return false;
+  const { subject, text, html } = buildCancellationEmail(customer, vehicle, booking);
+  try {
+    await transporter.sendMail({
+      from: `"${BUSINESS_NAME}" <${process.env.EMAIL_USER}>`,
+      to: customer.email,
+      subject,
+      text,
+      html
+    });
+    console.log(`✅ Cancellation email sent to ${customer.email} for ${vehicle.regNumber}`);
+    return true;
+  } catch (err) {
+    console.error(`❌ Failed to send cancellation email for ${vehicle.regNumber}:`, err.message);
+    return false;
+  }
+}
+
 async function sendReminderEmail(customer, vehicle, days) {
   if (!transporter) return false;
   if (!customer || !customer.email) return false;
@@ -676,6 +772,33 @@ app.put('/api/bookings/:id/reschedule', async (req, res) => {
   const customer = vehicle ? data.customers.find(c => c.id === vehicle.customerId) : null;
   if (transporter && vehicle && customer && customer.email) {
     emailSent = await sendRescheduleEmail(customer, vehicle, booking);
+  }
+
+  res.json({ booking, emailSent });
+});
+
+// Cancel a booking and email the customer to let them know, with an offer to rebook.
+// Only pending or confirmed bookings can be cancelled. The email is best-effort:
+// if it can't be sent, the cancellation still succeeds.
+app.post('/api/bookings/:id/cancel', async (req, res) => {
+  const data = readData();
+  const booking = data.bookings.find(b => b.id === req.params.id);
+  if (!booking) return res.status(404).json({ error: 'Booking not found' });
+
+  if (booking.status === 'completed' || booking.status === 'cancelled') {
+    return res.status(400).json({ error: 'Only pending or confirmed bookings can be cancelled' });
+  }
+
+  booking.status = 'cancelled';
+  booking.cancelledAt = new Date().toISOString();
+  writeData(data);
+
+  // Notify the customer their booking was cancelled (best-effort).
+  let emailSent = false;
+  const vehicle = data.vehicles.find(v => v.id === booking.vehicleId);
+  const customer = vehicle ? data.customers.find(c => c.id === vehicle.customerId) : null;
+  if (transporter && vehicle && customer && customer.email) {
+    emailSent = await sendCancellationEmail(customer, vehicle, booking);
   }
 
   res.json({ booking, emailSent });
