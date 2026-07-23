@@ -570,7 +570,15 @@ app.get('/api/public/vehicle/:reg', (req, res) => {
     .filter(b => b.vehicleId === vehicle.id)
     .sort((a, b) => new Date(b.date) - new Date(a.date))
     .slice(0, 5)
-    .map(b => ({ date: b.date, time: b.time, status: b.status }));
+    .map(b => ({
+      date: b.date,
+      time: b.time,
+      status: b.status,
+      result: b.result || null,                       // 'pass' | 'fail' for completed tests
+      resultExpiry: b.result === 'pass' ? (b.resultExpiry || null) : null,
+      cancellationReason: b.status === 'cancelled' ? (b.cancellationReason || null) : null,
+      isRetest: !!b.retestOf
+    }));
   res.json({
     regNumber: vehicle.regNumber,
     make: vehicle.make,

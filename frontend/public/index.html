@@ -121,8 +121,24 @@
 
         .history-list { margin-top: 1.1rem; padding-top: 1rem; border-top: 1px dashed var(--border); }
         .history-list .history-title { font-family: var(--font-display); text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.5rem; }
-        .history-row { display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--text-secondary); padding: 0.3rem 0; }
-        .history-row .h-status { font-weight: 600; text-transform: capitalize; }
+        .history-item { padding: 0.55rem 0; border-bottom: 1px solid var(--border); }
+        .history-item:last-child { border-bottom: none; }
+        .history-row { display: flex; justify-content: space-between; align-items: center; gap: 0.6rem; font-size: 0.88rem; color: var(--text-secondary); }
+        .history-row .h-date { font-weight: 600; color: var(--ink); }
+        .h-status {
+            font-size: 0.68rem; font-weight: 700; padding: 0.18rem 0.6rem; border-radius: 40px;
+            font-family: var(--font-display); text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap;
+        }
+        .h-status.pending { background: var(--amber-bg); color: var(--amber); }
+        .h-status.confirmed { background: var(--mot-green-bg); color: var(--mot-green); }
+        .h-status.completed { background: #e1e9ef; color: var(--steel-blue); }
+        .h-status.passed { background: var(--mot-green-bg); color: var(--mot-green); }
+        .h-status.failed { background: var(--hazard-red-bg); color: var(--hazard-red); }
+        .h-status.cancelled { background: var(--hazard-red-bg); color: var(--hazard-red); }
+        .history-detail { font-size: 0.78rem; color: var(--text-muted); margin-top: 0.25rem; line-height: 1.4; }
+        .history-detail strong { color: var(--ink); }
+        .history-detail.fail { color: var(--hazard-red); }
+        .history-empty { font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem; }
 
         .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.8rem; margin-bottom: 1.4rem; }
         .step-card { background: var(--surface); border-radius: var(--radius-sm); box-shadow: var(--shadow); padding: 1rem 0.7rem; text-align: center; border-top: 3px dashed var(--border); }
@@ -229,6 +245,48 @@
                 return { cls: 'valid', label: 'Valid' };
             }
 
+            function escapeHtml(str) {
+                return String(str).replace(/[&<>"']/g, (c) => (
+                    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+                ));
+            }
+
+            // Renders one booking with a coloured status pill and context-specific detail:
+            // pass shows the new expiry, fail flags a retest, cancelled shows the reason.
+            function renderBookingRow(b) {
+                const time = (b.time || '').slice(0, 5);
+                let statusClass = b.status;
+                let statusLabel = b.status;
+                if (b.status === 'completed' && b.result === 'pass') { statusClass = 'passed'; statusLabel = 'Passed'; }
+                else if (b.status === 'completed' && b.result === 'fail') { statusClass = 'failed'; statusLabel = 'Failed'; }
+                else { statusLabel = b.status.charAt(0).toUpperCase() + b.status.slice(1); }
+
+                let detail = '';
+                if (b.status === 'completed' && b.result === 'pass' && b.resultExpiry) {
+                    detail = `<div class="history-detail">Passed — MOT now valid until <strong>${formatDate(b.resultExpiry)}</strong>.</div>`;
+                } else if (b.status === 'completed' && b.result === 'fail') {
+                    detail = `<div class="history-detail fail">Failed — a retest is required before this vehicle has a valid MOT.</div>`;
+                } else if (b.status === 'cancelled' && b.cancellationReason) {
+                    detail = `<div class="history-detail">Cancelled — reason: <strong>${escapeHtml(b.cancellationReason)}</strong>.</div>`;
+                } else if (b.status === 'cancelled') {
+                    detail = `<div class="history-detail">This booking was cancelled.</div>`;
+                } else if (b.status === 'pending') {
+                    detail = `<div class="history-detail">Awaiting confirmation — we'll be in touch shortly.</div>`;
+                } else if (b.status === 'confirmed') {
+                    detail = `<div class="history-detail">Confirmed — we'll see you then.</div>`;
+                }
+                const retestTag = b.isRetest ? ` <span style="color:var(--steel-blue);">(retest)</span>` : '';
+
+                return `
+                    <div class="history-item">
+                        <div class="history-row">
+                            <span class="h-date">${formatDate(b.date)} at ${time}${retestTag}</span>
+                            <span class="h-status ${statusClass}">${statusLabel}</span>
+                        </div>
+                        ${detail}
+                    </div>`;
+            }
+
             async function searchVehicle() {
                 const reg = document.getElementById('regInput').value.trim();
                 const errorEl = document.getElementById('searchError');
@@ -268,15 +326,11 @@
 
                     const historyEl = document.getElementById('bookingHistory');
                     if (vehicle.bookings && vehicle.bookings.length > 0) {
-                        historyEl.innerHTML = `<div class="history-list"><div class="history-title">Recent Bookings</div>` +
-                            vehicle.bookings.map(b => `
-                                <div class="history-row">
-                                    <span>${formatDate(b.date)} at ${(b.time || '').slice(0, 5)}</span>
-                                    <span class="h-status">${b.status}</span>
-                                </div>
-                            `).join('') + `</div>`;
+                        historyEl.innerHTML = `<div class="history-list"><div class="history-title">Your Booking Status</div>` +
+                            vehicle.bookings.map(b => renderBookingRow(b)).join('') + `</div>`;
                     } else {
-                        historyEl.innerHTML = '';
+                        historyEl.innerHTML = `<div class="history-list"><div class="history-title">Your Booking Status</div>` +
+                            `<div class="history-empty">No bookings found for this registration yet. You can request one using the form below.</div></div>`;
                     }
 
                     resultCard.classList.remove('hidden');
