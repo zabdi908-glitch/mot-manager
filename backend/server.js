@@ -17,6 +17,10 @@ const APP_URL = process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || `ht
 const BUSINESS_NAME = process.env.BUSINESS_NAME || 'The Workshop';
 const BUSINESS_PHONE = process.env.BUSINESS_PHONE || '';
 
+// Fee charged per completed MOT test, used to estimate revenue in Analytics.
+// Defaults to the UK statutory maximum for a car (£54.85). Override with MOT_FEE.
+const MOT_FEE = parseFloat(process.env.MOT_FEE || '54.85') || 54.85;
+
 // Middleware
 app.use(cors());
 app.use(express.json());
@@ -741,6 +745,104 @@ app.get('/api/data', (req, res) => {
   res.json(readData());
 });
 
+// =========================
+//   ANALYTICS (aggregated from the JSON store over a date range)
+// =========================
+// Local Y-M-D (not UTC) so it lines up with booking.date, which is a plain
+// timezone-less date. Using toISOString() here would shift dates in non-UTC zones.
+function toDateStr(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+// Monday (ISO week start) of the week containing dateStr (YYYY-MM-DD).
+function isoWeekStart(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  const dow = (d.getDay() + 6) % 7; // 0 = Monday
+  d.setDate(d.getDate() - dow);
+  return toDateStr(d);
+}
+
+app.get('/api/analytics', (req, res) => {
+  const data = readData();
+  const now = new Date();
+
+  // Default range = current calendar month (1st → today).
+  const defFrom = toDateStr(new Date(now.getFullYear(), now.getMonth(), 1));
+  const defTo = toDateStr(now);
+  const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
+  let from = isDate(req.query.from) ? req.query.from : defFrom;
+  let to = isDate(req.query.to) ? req.query.to : defTo;
+  if (from > to) { const t = from; from = to; to = t; } // tolerate reversed input
+
+  const inRange = (dateStr) => dateStr && dateStr >= from && dateStr <= to;
+
+  // --- Completed MOTs in range (by completion date) ---
+  const completed = data.bookings.filter(b =>
+    b.status === 'completed' && b.completedAt && inRange(b.completedAt.slice(0, 10)));
+  const totalCompleted = completed.length;
+  const passes = completed.filter(b => b.result === 'pass').length;
+  const fails = completed.filter(b => b.result === 'fail').length;
+  const passRate = totalCompleted ? Math.round((passes / totalCompleted) * 1000) / 10 : 0;
+
+  // Average days from booking creation to completion.
+  let daysSum = 0, daysCount = 0;
+  completed.forEach(b => {
+    if (b.createdAt && b.completedAt) {
+      const diff = (new Date(b.completedAt) - new Date(b.createdAt)) / 86400000;
+      if (diff >= 0) { daysSum += diff; daysCount++; }
+    }
+  });
+  const avgDays = daysCount ? Math.round((daysSum / daysCount) * 10) / 10 : 0;
+
+  const revenue = Math.round(totalCompleted * MOT_FEE * 100) / 100;
+
+  // --- Bookings in range (by appointment date) — for trend & busiest days ---
+  const bookingsInRange = data.bookings.filter(b => inRange(b.date));
+
+  // Bookings trend, grouped by ISO week.
+  const weekMap = new Map();
+  bookingsInRange.forEach(b => {
+    const wk = isoWeekStart(b.date);
+    weekMap.set(wk, (weekMap.get(wk) || 0) + 1);
+  });
+  const trend = [...weekMap.entries()]
+    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    .map(([week, count]) => ({ week, count }));
+
+  // Busiest days of the week (Mon → Sun).
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const dowCounts = [0, 0, 0, 0, 0, 0, 0];
+  bookingsInRange.forEach(b => {
+    const d = new Date(b.date + 'T00:00:00');
+    if (!isNaN(d)) dowCounts[d.getDay()]++;
+  });
+  const busiestDays = [1, 2, 3, 4, 5, 6, 0].map(i => ({ day: dayNames[i], count: dowCounts[i] }));
+
+  // Staff performance — completed MOTs grouped by who completed them.
+  const staffMap = new Map();
+  completed.forEach(b => {
+    const name = b.completedBy || 'Unattributed';
+    staffMap.set(name, (staffMap.get(name) || 0) + 1);
+  });
+  const staffPerformance = [...staffMap.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count);
+
+  res.json({
+    range: { from, to },
+    fee: MOT_FEE,
+    stats: { totalCompleted, passRate, avgDays, revenue },
+    passFail: { pass: passes, fail: fails },
+    trend,
+    busiestDays,
+    staffPerformance,
+    totalBookings: bookingsInRange.length
+  });
+});
+
 // Download the full dataset as a JSON file (admin only — protected by the middleware above)
 app.get('/api/backup', (req, res) => {
   const data = readData();
@@ -899,6 +1001,9 @@ app.post('/api/bookings/:id/complete', (req, res) => {
   booking.status = 'completed';
   booking.result = result;
   booking.completedAt = new Date().toISOString();
+  // Attribute the completion to the logged-in staff member (for Analytics).
+  booking.completedBy = req.staff ? req.staff.name : null;
+  booking.completedById = req.staff ? req.staff.staffId : null;
   // Record the expiry this test produced (pass only) so the vehicle's MOT
   // history can show it even after the vehicle's current expiry moves on.
   booking.resultExpiry = result === 'pass' ? newExpiry : null;
